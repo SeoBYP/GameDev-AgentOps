@@ -1,27 +1,52 @@
 ﻿using DotNetEnv;
+using GameDev_AgentOps;
 
-// 19,26,30,35
-
+// .env 파일 로드
 Env.Load();
 
-var apiKey  = Environment.GetEnvironmentVariable("LLM_API_KEY");
-var baseUrl = Environment.GetEnvironmentVariable("LLM_BASE_URL") 
-              ?? "https://openrouter.ai/api/v1";
-var model   = Environment.GetEnvironmentVariable("LLM_MODEL") 
-              ?? "anthropic/claude-sonnet-4-5";
+Console.WriteLine("🤖 대화형 Agent 시작 (종료: 'quit' 입력)");
+Console.WriteLine("────────────────────────────────────────");
+Console.WriteLine();
 
+// AIAgentBuilder로 에이전트 생성 (LLM 제공자를 환경 변수로 결정)
+var agent = AIAgentBuilder
+    .FromEnvironment()
+    .Build(
+        name: "ChatAgent",
+        instructions: @"당신은 친절하고 도움이 되는 AI 어시스턴트다.
+사용자와 자연스럽게 대화한다.
+답변은 간결하고 명확하게 한다."
+    );
 
-if (string.IsNullOrEmpty(apiKey))
+// Thread를 사용하여 대화 컨텍스트 유지
+var session = await agent.CreateSessionAsync();
+while (true)
 {
-    Console.WriteLine("❌ LLM_API_KEY 환경 변수가 설정되지 않았다.");
-    Console.WriteLine("   .env 파일 또는 시스템 환경 변수를 확인하라.");
+    Console.Write("💬 사용자: ");
+    var input = Console.ReadLine();
+    
+    if (string.IsNullOrWhiteSpace(input)) continue;
+    if (input.Trim().ToLower() == "quit") break;
+    
+    Console.WriteLine();
+    Console.Write("🤖 Agent: ");
+
+    try
+    {
+        var result = await agent.RunAsync(input,session);
+        Console.WriteLine(result.Text);
+        Console.WriteLine();
+    }
+    catch (HttpRequestException ex)
+    {
+        Console.WriteLine($"❌ 네트워크 오류: {ex.Message}");
+        Console.WriteLine("   LLM_BASE_URL과 인터넷 연결을 확인하라.");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"❌ 오류: {ex.Message}");
+    }
+
 }
-else
-{
-    Console.WriteLine("✅ API 키 로드 성공");
-    Console.WriteLine($"   키 앞 8자리: {apiKey[..Math.Min(8, apiKey.Length)]}...");
-    Console.WriteLine($"✅ Base URL: {baseUrl}");
-    Console.WriteLine($"✅ 모델: {model}");
-    Console.WriteLine($"✅ .NET 버전: {Environment.Version}");
-    Console.WriteLine("환경 준비 완료!");
-}
+
+Console.WriteLine("대화를 종료한다.");
