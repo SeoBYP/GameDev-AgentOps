@@ -89,6 +89,72 @@ flowchart LR
 
 ---
 
+## Chapter 04 — Tools (Tool Calling)
+
+### 핵심 메커니즘
+LLM은 **함수 본문을 못 본다.** 등록된 도구의 **이름 + 설명 + 파라미터 정보**만 보고 호출 여부를 결정한다.
+`AIFunctionFactory.Create(delegate)`가 리플렉션으로 C# 함수를 JSON 스키마로 변환 → LLM 요청의 `tools` 필드로 전달.
+
+```mermaid
+flowchart LR
+    A["C# delegate"] --> B["AIFunctionFactory.Create<br/>(리플렉션 → JSON 스키마)"]
+    B --> C["LLM: tools 필드로 수신"]
+    C --> D["LLM이 tool_call JSON 요청"]
+    D --> E["프레임워크가 실제 함수 실행"]
+    E --> F["결과를 LLM에 되먹임 → 최종 답"]
+```
+
+- **설명 = 도구를 위한 프롬프트 엔지니어링.** 이름/설명이 부실하면 LLM이 엉뚱한 도구를 부르거나 안 부른다.
+- **인자는 LLM이 자연어에서 추출** → 틀릴 수 있으니 도구 함수 안에서 입력 검증 필요.
+- **도구 실행 = 실제 코드 실행** → 부작용·보안 주의(추후 파일 도구는 sandbox 필요).
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| 외부 날씨 API가 "못 가져옴" | OpenWeatherMap **401 Invalid API key** — 신규 키 활성화 지연(~2h) | 엔드포인트 직접 호출로 실제 상태 확인, 활성화 대기 |
+| 진짜 에러가 안 보임 | 도구 `catch`가 401을 평범한 문자열로 뭉갬 | 개발 중엔 `ex.Message`/HTTP 상태코드 노출 |
+| `[Description]`이 LLM에 안 감 | `[Description]`을 **등록 안 된 함수**(`GetRealWeather`)에 붙이고, 캐시 래퍼(`GetWeatherCached`)를 등록 | 설명은 **등록 대상 함수**에 붙여야 전달됨 |
+| XML 주석(`///`) 무시됨 | 콘솔 프로젝트는 XML 문서파일 미생성 → 런타임 리플렉션으로 못 읽음 | 설명은 `[Description]` 어트리뷰트로 (메타데이터에 남음) |
+
+> 두 번째 외부 API(OpenWeatherMap)는 LLM(OpenRouter)과 **별개의 서비스·별개의 키**. 도구가 또 다른 외부 API를 호출하는 구조를 처음 경험.
+
+---
+
+## Chapter 05 — 대화 흐름 관리 (Session 영속화 / 장기 기억)
+
+### 단기 vs 장기 — 수명이 다른 두 저장
+| | 세션(단기) | 메모리 프로바이더(장기) |
+|---|---|---|
+| 저장 대상 | 이번 대화 **메시지 전체** | 이름·직업 등 **추출된 사실** |
+| 기본 수명 | 메모리에만 → 프로세스 종료 시 소멸 | 디스크에 영속 |
+| 용도 | "껐다 켜서 **같은 대화 이어가기**" | "**새 대화**에서도 사실 기억" |
+| 파일 | `session.json` (별도) | `user001.json` |
+
+- **"장기 기억"의 정체**: 마법이 아니라 — 디스크의 사실을 읽어 **시스템 프롬프트(`instructions`)에 매번 주입**하는 것. LLM은 여전히 stateless.
+- **Session은 "소멸하는 것"이 정의가 아님**: 그릇일 뿐, 직렬화하면 영속됨. 휘발 = 기본값, 영속 = 옵션.
+
+### 세션 영속화 (프레임워크 내장)
+MAF 1.9.0 내장 API 사용 (수제 `SessionManager` 불필요):
+```mermaid
+flowchart LR
+    A["시작: File.Exists?"] -->|있음| B["ReadAllText → JsonDocument.Parse<br/>→ DeserializeSessionAsync"]
+    A -->|없음| C["CreateSessionAsync()"]
+    B --> D[대화 루프]
+    C --> D
+    D --> E["종료: SerializeSessionAsync<br/>→ GetRawText → WriteAllText"]
+```
+- **Serialize ≠ Save**: `SerializeSessionAsync`는 세션을 **JsonElement로 변환**만. 디스크 저장은 `File.WriteAllText`까지 해야 완성(2단계).
+- **복원=시작, 저장=종료**.
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| 휘발 데이터를 영속 저장소에 혼입 | 세션(대화)을 메모리 프로바이더(프로필)에 욱여넣음 | 세션은 `session.json`으로 **분리**. 목적·수명이 다름 |
+| 첫 실행 크래시 | 복원 조건을 `Profile is not null`로 둠(항상 true) → 빈 세션 Parse | 조건을 `File.Exists(sessionPath)`로 |
+| `quit` 시 대화 미보존 | 세션 저장을 20턴 압축 블록 안에만 둠 | **루프 종료 직후(끝자리)** 에 저장 추가 |
+
+---
+
 ## 관통하는 교훈
 
 > **"문서·튜토리얼에 적힌 것"이 아니라 "내 환경이 실제로 가진 것"을 확인하라.**
