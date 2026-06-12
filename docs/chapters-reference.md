@@ -366,6 +366,115 @@ public class SimpleMemoryProvider
 
 ---
 
+## Chapter 06 — 고급 기능 (Streaming · Middleware)
+
+**목표:** 실시간 스트리밍 출력 + 미들웨어(로깅) 래퍼.
+
+**강의 핵심:** `RunStreamAsync`(완성 후 vs 실시간), Extended Thinking(thinking 옵션), 커스텀 웹검색 Tool, Middleware 래퍼(로깅/필터/메트릭). ※ 강의 API명은 1.9.0과 다수 불일치.
+
+### 내 코드 — 스트리밍 + 로깅 미들웨어 (yield 패스스루)
+```csharp
+var aiAgent = AIAgentBuilder.FromEnvironment().Build("StreamChatAgent", "대화형 어시스턴트다.");
+var thread  = await aiAgent.CreateSessionAsync();
+var logged  = new LoggingAgentWrapper(aiAgent);          // ★ 루프 밖 1회 생성
+
+while (true)
+{
+    var input = Console.ReadLine()?.Trim();
+    if (string.IsNullOrWhiteSpace(input)) continue;
+    if (input.ToLower() == "quit") break;
+
+    await foreach (var c in logged.RunStreamingAsync(input, thread))  // 래퍼 통해 호출
+        Console.Write(c.Text);                                        // 실시간 출력
+}
+
+// 미들웨어: 스트림을 흘려보내며(yield) 로깅
+public class LoggingAgentWrapper
+{
+    private readonly AIAgent _agent;
+    private readonly string _logFile;
+    public LoggingAgentWrapper(AIAgent agent, string logDir = "Logs") { /* 로그파일 1개 생성 */ }
+
+    public async IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(string input, AgentSession? thread = null)
+    {
+        Log($"USER: {input}");
+        var sw = Stopwatch.StartNew();
+        var buffer = new StringBuilder();
+
+        await foreach (var chunk in _agent.RunStreamingAsync(input, thread))
+        {
+            buffer.Append(chunk.Text);   // 로그용 누적
+            yield return chunk;          // ★ 호출부로 즉시 흘려보냄 → 실시간 유지
+        }
+        sw.Stop();
+        Log($"AGENT ({sw.ElapsedMilliseconds}ms): {buffer}");   // 완료 후 최종 로그
+    }
+}
+```
+
+**핵심 포인트 / 함정**
+- `RunStreamAsync`(강의) → **`RunStreamingAsync`**(1.9.0). 청크 타입 `AgentResponseUpdate`, `.Text`.
+- 스트리밍 호출을 감싸는 미들웨어는 **자신도 스트리밍(yield 패스스루)** 이어야 실시간 유지. `string` 누적 반환 시 스트림 붕괴(블로킹화).
+- 미들웨어 래퍼는 **루프 밖 1회 생성** (안에서 만들면 매 턴 새 로그파일/카운트 리셋).
+- `try/catch`와 `yield return`은 같은 블록 공존 불가(C# 제약).
+- Extended Thinking: `OpenAIAgentClient`/`thinking` dict는 1.9.0·OpenRouter·무료모델에 부적합 → 개념만, 구현 보류.
+
+---
+
+## Chapter 07 — 실전 RAG (문서 질의응답) ★ MVP 직결
+
+**목표:** 문서를 청킹·검색해 근거 기반으로 답하는 RAG. (`DocumentManager` + `DocumentQAAgent`)
+
+**강의 핵심:** RAG = Retrieve→Augment→Generate. TXT/PDF 로드, overlap 청킹, 키워드 검색, 컨텍스트 주입, 스트리밍 답변, 출처 명시. PDF는 `PdfPig`.
+
+### 내 코드 — DocumentQAAgent 핵심 (검색→주입→생성)
+```csharp
+public class DocumentQAAgent
+{
+    private readonly DocumentManager _docManager;
+    private readonly AIAgent _agent;
+    private AgentSession _session;
+
+    public DocumentQAAgent(DocumentManager dm)
+    {
+        _docManager = dm;
+        _agent = AIAgentBuilder.FromEnvironment()
+            .Build("DocumentQA", "제공된 문서만 근거로 답하고, 없으면 '찾을 수 없습니다', 출처를 밝힌다.");
+        // ★ 세션은 생성자에서 만들지 않음 (async 불가)
+    }
+
+    public async Task<QAResult> AskAsync(string question)
+    {
+        _session ??= await _agent.CreateSessionAsync();   // ★ 지연 초기화 (race 없음)
+
+        var chunks = _docManager.SearchChunks(question, topK: 5);   // Retrieve
+        if (chunks.Count == 0) return new QAResult("관련 내용 없음", new());
+
+        var ctx = new StringBuilder("=== 관련 문서 ===\n");        // Augment
+        foreach (var c in chunks) ctx.AppendLine($"[출처: {c.FileName} #{c.ChunkIndex}]\n{c.Text}");
+        ctx.AppendLine($"\n=== 질문 ===\n{question}\n위 문서를 바탕으로 답해줘.");
+
+        var answer = new StringBuilder();                          // Generate (스트리밍)
+        await foreach (var u in _agent.RunStreamingAsync(ctx.ToString(), _session))
+        { Console.Write(u.Text); answer.Append(u.Text); }
+
+        var sources = chunks.Select(c => $"{c.FileName} (#{c.ChunkIndex})").Distinct().ToList();
+        return new QAResult(answer.ToString(), sources);
+    }
+}
+```
+
+`DocumentManager`: `LoadDocument`(TXT/PDF) → `ChunkText`(문단 단위 + overlap) → `SearchChunks`(`Tokenize`+`CalculateScore` 키워드 점수, topK).
+
+**핵심 포인트 / 함정**
+- RAG는 ch05 "프롬프트 주입"과 같은 원리 — 주입 대상이 "검색된 청크".
+- **검색은 lexical(키워드)** — "비동기"로 "async" 못 찾음. 품질 필요 시 임베딩 벡터(semantic)로 교체.
+- **overlap 청킹**: 경계에 걸친 내용 손실 방지. chunk size 트레이드오프.
+- **async 생성자 함정**: 생성자는 `await` 불가 → fire-and-forget `ContinueWith`는 race. **정적 async 팩토리** 또는 **`_session ??= await ...` 지연 초기화**.
+- 강의 `RunStreamAsync`/`CreateThread`/`object thread` → `RunStreamingAsync`/`CreateSessionAsync`/`AgentSession`.
+
+---
+
 ## 한 장 요약
 
 | 챕터 | 한 일 | 핵심 API/개념 |
@@ -375,3 +484,5 @@ public class SimpleMemoryProvider
 | 03 | 첫 멀티턴 | `CreateSessionAsync`, `RunAsync(input, session)` |
 | 04 | 도구 | `[Description]`, Delegate→`AIFunctionFactory.Create` |
 | 05 | 영속화 | `Serialize/DeserializeSessionAsync`, 단기≠장기 |
+| 06 | 스트리밍·미들웨어 | `RunStreamingAsync`, yield 패스스루 래퍼 |
+| 07 | 실전 RAG | 청킹·키워드검색·주입·출처, 지연 세션 초기화 |

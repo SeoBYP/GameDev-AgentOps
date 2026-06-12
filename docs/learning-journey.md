@@ -155,6 +155,65 @@ flowchart LR
 
 ---
 
+## Chapter 06 — 고급 기능 (Streaming · Middleware)
+
+### Streaming
+- `RunAsync`(완성 후 반환) vs **`RunStreamingAsync`**(SSE로 토큰 즉시 청크 전달). 결과는 같고 체감 지연만 다름.
+- `await foreach (var update in agent.RunStreamingAsync(input, session))` → `update.Text` 실시간 출력. (타입: `AgentResponseUpdate`)
+
+### Middleware (데코레이터 패턴)
+로깅·필터·메트릭 같은 **횡단 관심사**를 에이전트를 "감싸서" 호출 전후에 끼움. `LoggingAgentWrapper`가 `AIAgent`를 품고 `RunStreamingAsync`를 가로채 로그.
+
+```mermaid
+flowchart LR
+    A[사용자 입력] --> B["LoggingWrapper<br/>USER 로그 + 타이머"]
+    B --> C["agent.RunStreamingAsync"]
+    C -->|yield 청크| D[실시간 화면 출력]
+    C -->|buffer 누적| E["완료 후 AGENT 로그"]
+```
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| `RunStreamAsync` 없음 | 강의 표기 — 1.9.0은 `RunStreamingAsync` | 메서드명 교체 |
+| Extended Thinking 코드 안 됨 | `OpenAIAgentClient`/`thinking` dict는 1.9.0/OpenRouter 무관, 무료모델 미지원 | 개념만, 구현 보류 |
+| 미들웨어가 로그 안 남김 | 래퍼 선언만 하고 미사용(원본 직접 호출) | 래퍼로 감싸 그걸 통해 호출 |
+| 래퍼가 매 턴 새 로그파일 | `new Wrapper()`를 루프 안에서 | 루프 밖 1회 생성 |
+| 스트리밍이 통짜로 출력 | 래퍼가 전체 누적 후 `string` 반환 → 스트림 붕괴 | `async IAsyncEnumerable` + `yield return`(누적은 버퍼에) |
+
+> **핵심**: 스트리밍 호출을 감싸는 미들웨어는 **자신도 스트리밍(yield 패스스루)** 이어야 실시간이 유지된다. 결과를 모아 반환하면 블로킹으로 되돌아간다.
+
+---
+
+## Chapter 07 — 실전 RAG (문서 질의응답) ★ MVP 직결
+
+### RAG 원리
+LLM은 내 문서를 모름 → **Retrieve(관련 청크 검색) → Augment(프롬프트에 주입) → Generate(근거로 답변)**.
+ch05 "장기 기억=사실을 프롬프트에 주입"과 **같은 원리** — 주입 대상이 "검색된 문서 청크"일 뿐.
+
+```mermaid
+flowchart LR
+    Q[질문] --> R["DocumentManager.SearchChunks<br/>(키워드 점수)"]
+    R --> A["컨텍스트 구성<br/>(청크 + 출처)"]
+    A --> G["agent.RunStreamingAsync<br/>(근거로 생성)"]
+    G --> O["답변 + 출처"]
+```
+
+### 핵심 개념
+- **청킹**: 문서를 작게 쪼개 관련 청크만 검색·주입. **overlap**으로 경계에 걸친 내용 손실 방지. chunk size 트레이드오프(크면 토큰낭비, 작으면 맥락끊김).
+- **lexical vs semantic**: 이 구현은 **키워드(단어 겹침) 검색** → "비동기"로 "async" 못 찾음. 진짜 품질은 **임베딩 벡터+코사인 유사도**(semantic). 지금은 흐름 학습용.
+- **출처 명시**: 검색된 청크의 파일명·인덱스를 답변과 함께 → 환각 방지·신뢰.
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| 강의 `RunStreamAsync`/`CreateThread`/`object thread` | 1.9.0 불일치 | `RunStreamingAsync`/`CreateSessionAsync`/`AgentSession` |
+| async 세션을 생성자에서 초기화 불가 | 생성자는 async 불가 → fire-and-forget `ContinueWith`는 **race condition**(세션 준비 전 사용) | 정적 async 팩토리 또는 **`_session ??= await CreateSessionAsync()` 지연 초기화** |
+
+> **GameDev AgentOps 연결**: `DocumentManager`→Unity 로그/GDD retriever, `DocumentQAAgent`→"이 규칙이 뭐였지?" 출처 답변. 보고서 데모 시나리오 3번 그대로.
+
+---
+
 ## 관통하는 교훈
 
 > **"문서·튜토리얼에 적힌 것"이 아니라 "내 환경이 실제로 가진 것"을 확인하라.**
