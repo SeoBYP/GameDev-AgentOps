@@ -527,6 +527,50 @@ public class FileTools
 
 ---
 
+## Chapter 09 — Multi-Agent Workflow ★ MVP 직결
+
+**목표:** 여러 전문 에이전트를 순차/병렬/조건으로 오케스트레이션.
+
+**강의 핵심:** AgentFactory(역할별 전문 에이전트), 순차(연구→분석→작성→검토), 병렬(`Task.WhenAll`), 조건(라우터 분기). ※ "Workflow"지만 실제론 **C# 수작업 오케스트레이션**(MAF 네이티브 그래프 아님).
+
+### 내 코드 — 순차 + 병렬 핵심
+```csharp
+// 순차: 출력을 다음 프롬프트에 이어붙여 전달 (stateless 에이전트)
+var research = await RunAgent(_researcher, $"심층 연구해줘: {topic}");
+var analysis = await RunAgent(_analyst,   $"분석해줘:\n\n{research}");
+var report   = await RunAgent(_writer,    $"보고서 작성:\n\n{research}\n{analysis}");
+var review   = await RunAgent(_reviewer,  $"검토해줘:\n\n{report}");
+if (review.Contains("NEEDS_REVISION"))    // ⚠️ 취약 — 구조화 출력 권장
+    report = await RunAgent(_writer, $"피드백 반영 개선:\n{report}\n{review}");
+
+// RunAgent: agent.RunStreamingAsync(prompt) 스트리밍 + 누적
+
+// 병렬: Task를 먼저 다 띄우고 한꺼번에 await (각각 await하면 순차가 됨!)
+var tasks = new[] {
+    techAgent.RunAsync($"기술 관점: {topic}"),
+    bizAgent.RunAsync($"비즈니스 관점: {topic}"),
+    riskAgent.RunAsync($"리스크 관점: {topic}"),
+};
+var results = await Task.WhenAll(tasks);
+var final = await synth.RunAsync($"통합:\n{results[0].Text}\n{results[1].Text}\n{results[2].Text}");
+
+// 조건: 라우터 분류 → 분기 (AgentResponse, RunResult 아님)
+var routing = await _router.RunAsync($"복잡도 판단: {question}");
+AgentResponse result = routing.Text.Contains("COMPLEX")   // ⚠️ 취약
+    ? await _complexAgent.RunAsync(question)
+    : await _simpleAgent.RunAsync(question);
+```
+
+**핵심 포인트 / 함정**
+- **"Workflow" = 수작업 오케스트레이션** (네이티브 그래프 아님). 학습엔 명료, 운영 audit/HITL 필요 시 네이티브로.
+- **에이전트 전문화**: 좁은 프롬프트로 분해 → 품질·디버깅·재사용.
+- **단계 간 전달은 stateless**: 이전 출력을 다음 프롬프트에 이어붙임(세션 공유 아님).
+- **병렬의 원리**: `RunAsync`는 호출 즉시 시작 → 배열로 다 띄운 뒤 `Task.WhenAll`. 각각 `await`하면 순차.
+- **판정 파싱 취약(`.Contains`)**: review·router 양쪽. 운영(severity 분류)엔 구조화 출력/판정 토큰 추출 필수.
+- `RunStreamAsync`→`RunStreamingAsync`, `RunResult`→`AgentResponse`.
+
+---
+
 ## 한 장 요약
 
 | 챕터 | 한 일 | 핵심 API/개념 |
@@ -539,3 +583,4 @@ public class FileTools
 | 06 | 스트리밍·미들웨어 | `RunStreamingAsync`, yield 패스스루 래퍼 |
 | 07 | 실전 RAG | 청킹·키워드검색·주입·출처, 지연 세션 초기화 |
 | 08 | 업무 자동화·Sandbox | 멀티 도구, `IsSafePath`(GetFullPath+구분자 StartsWith) |
+| 09 | Multi-Agent | 순차/병렬(`Task.WhenAll`)/조건, stateless 출력 전달 |

@@ -247,6 +247,38 @@ flowchart LR
 
 ---
 
+## Chapter 09 — Multi-Agent Workflow (오케스트레이션) ★ MVP 직결
+
+### 정정: "Workflow" ≠ MAF 네이티브 Workflow
+이 챕터의 "Workflow"는 **C#으로 에이전트를 순서대로/병렬로/if-else로 부르는 수작업 오케스트레이션**. MAF의 그래프·체크포인트·HITL Workflow가 아님(보고서가 지적한 부분). 학습엔 더 명료하고, QA triage 같은 결정적 파이프라인엔 충분. 감사·승인 게이트가 필요해지면 네이티브로 승격.
+
+### 핵심 개념
+- **에이전트 전문화**: 좁은 시스템 프롬프트(연구/분석/작성/검토) = 프롬프트 분해 → 단계 품질↑·디버깅↑·재사용.
+- **단계 간 데이터 전달(stateless)**: 에이전트는 세션 없이 one-shot 호출. **이전 출력을 다음 프롬프트 문자열에 이어붙여** 전달. "에이전트 간 통신"의 정체.
+- **3패턴**: 순차(누적+1회 재작성), 병렬(`Task.WhenAll`로 독립작업 동시→합성), 조건(LLM 분류기→코드 분기).
+- **병렬의 원리**: `RunAsync`는 호출 즉시 Task 시작 → 배열로 다 띄운 뒤 `await Task.WhenAll`. 각각 `await`하면 순차가 됨.
+
+```mermaid
+flowchart LR
+    Q[입력] --> R[연구]
+    R --> A[분석]
+    A --> W[작성]
+    W --> V{검토}
+    V -->|NEEDS_REVISION| W
+    V -->|APPROVED| O[완료]
+```
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| `RunStreamAsync`/`RunResult` | 1.9.0 불일치 | `RunStreamingAsync`/`AgentResponse` |
+| **판정 파싱 취약(`.Contains`)** | LLM 자유텍스트에 단어가 우연히 섞이면 오판정(review·router 양쪽) | 구조화 출력(JSON/enum) 또는 마지막 줄/판정 토큰만 추출 |
+| 워크플로 1회에 LLM 다중 호출 | 무료 모델 분당 20회/일 50회 | 429 시 대기 또는 충전 |
+
+> **GameDev AgentOps 연결**: 순차 workflow = 크래시 triage(Collector→Analyzer→Severity). 단, severity 판정을 `.Contains`로 하면 운영 사고 → **구조화 판정 필수**.
+
+---
+
 ## 관통하는 교훈
 
 > **"문서·튜토리얼에 적힌 것"이 아니라 "내 환경이 실제로 가진 것"을 확인하라.**
