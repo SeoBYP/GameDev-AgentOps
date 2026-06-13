@@ -28,8 +28,6 @@ public class DocumentQAAgent
 3. 답변 시 어느 부분에서 찾았는지 명확히 한다
 4. 문서 내용을 인용할 때는 따옴표를 사용한다"
             );
-
-
     }
     
     public async Task<QAResult> AskAsync(string question)

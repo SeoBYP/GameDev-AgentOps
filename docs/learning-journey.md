@@ -214,6 +214,39 @@ flowchart LR
 
 ---
 
+## Chapter 08 — 업무 자동화 (멀티 도구 + Sandbox 보안) ★ MVP 직결
+
+### 멀티 도구 조합
+`FileTools`·`DataTools`·`SystemTools`에서 11개 도구 등록. **인스턴스 메서드 delegate**가 인스턴스를 클로저로 캡처 → 도구가 자기 상태(`_workDir`) 보유. CsvHelper로 CSV 통계.
+
+### ★ 핵심 — 프롬프트 안전 ≠ 코드 강제 (보안 사고방식)
+`../OUTSIDE_secret.txt 읽어줘` → 에이전트가 거부했지만, **거부한 건 LLM(프롬프트 지시)이지 코드가 아니었다**. 코드(`Path.Combine`)엔 가드가 없어 여전히 취약 — 표현만 바꾸면 뚫림.
+> **신뢰 경계(파일 접근)는 프롬프트로 "부탁"하면 안 되고 코드로 "강제(enforce)"해야 한다.**
+
+### Sandbox(SafePath) 구현
+```mermaid
+flowchart LR
+    A["fileName (LLM이 추출)"] --> B["Path.Combine(_workDir, fileName)"]
+    B --> C["Path.GetFullPath → ../ 해석"]
+    C --> D{"_workDir + 구분자 로 시작?"}
+    D -->|예| E[허용]
+    D -->|아니오| F[거부]
+```
+- **base 정규화**: `Path.GetFullPath(baseDir)`.
+- **prefix 함정**: `StartsWith(_workDir)`는 형제폴더 `AutomationWorkspace-evil` 통과시킴 → **끝에 `Path.DirectorySeparatorChar` 붙여** 비교(`_workDirPrefix`).
+- **defense-in-depth**: `ReadFile`/`WriteFile`/`SearchFiles` 모두 같은 `IsSafePath` 관문 통과.
+- 남은 엣지: `GetFullPath`는 심링크 미해석(고급, 보류).
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| sandbox "주장"만 하고 미구현 | 강의 코드가 `Path.Combine`만 사용, `../` 무방비 | `IsSafePath`(GetFullPath+StartsWith) 추가 |
+| 안전해 보였으나 사실 LLM이 거부 | 프롬프트 지시 기반 → 우회 가능 | 코드로 강제 |
+| 형제폴더 prefix 우회 | `StartsWith`에 구분자 없음 | base 끝에 구분자 보장 후 비교 |
+| 테스트 파일을 못 찾음 | `MyDocuments`가 OneDrive로 리다이렉트(`OneDrive\문서`) | 실제 경로 확인 후 그쪽에 배치 |
+
+---
+
 ## 관통하는 교훈
 
 > **"문서·튜토리얼에 적힌 것"이 아니라 "내 환경이 실제로 가진 것"을 확인하라.**

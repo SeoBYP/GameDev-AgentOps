@@ -1,136 +1,148 @@
 ﻿using System.Diagnostics;
 using System.Text;
+using AutomationAgent;
 using DotNetEnv;
 using GameDev_AgentOps;
 using Microsoft.Agents.AI;
 using Microsoft.Agents.AI.OpenAI;
 using OpenAI;
+using AIAgentBuilder = GameDev_AgentOps.AIAgentBuilder;
 
 Env.Load();
 
-Console.WriteLine("📚 문서 질의응답 시스템");
-Console.WriteLine(new string('━', 60));
+Console.WriteLine("🤖 업무 자동화 Agent");
+Console.WriteLine(new string('=', 60));
+Console.WriteLine("자연어로 명령하면 Agent가 파일/데이터를 처리한다.");
+Console.WriteLine("종료: 'quit' | 도움말: 'help'");
+Console.WriteLine();
 
-var docManager = new DocumentManager();
-var qaAgent = new DocumentQAAgent(docManager);
+// 도구 초기화
+var fileTools = new FileTools();
+var dataTools = new DataTools(fileTools.GetWorkDirectory().Replace("작업 디렉토리: ", ""));
+var sysTools = new SystemTools();
 
-// 테스트 문서 자동 생성
-CreateSampleDocument();
+// 샘플 데이터 생성
+CreateSampleData(fileTools);
+
+// Agent 생성 - 모든 Tool 등록
+var agent = AIAgentBuilder
+    .FromEnvironment()
+    .Build(
+        name: "AutomationAgent",
+        instructions: @"당신은 업무 자동화 전문가다.
+FileTools, DataTools, SystemTools를 사용하여 사용자의 요청을 수행한다.
+
+사용 가능한 도구:
+- ListFiles: 파일 목록 조회
+- ReadFile: 파일 내용 읽기
+- WriteFile: 파일 쓰기
+- SearchFiles: 파일 검색
+- AnalyzeCsv: CSV 파일 분석
+- AnalyzeText: 텍스트 파일 분석
+- Calculate: 숫자 계산
+- GetCurrentTime: 현재 시간
+- GetDiskUsage: 디스크 사용량
+- GetSystemInfo: 시스템 정보
+
+안전 규칙:
+- 파일 삭제는 수행하지 않는다
+- 작업 디렉토리 외부 파일은 접근하지 않는다
+- 결과를 명확하게 설명한다",
+        tools: new Delegate[]
+        {
+            fileTools.ListFiles,
+            fileTools.ReadFile,
+            fileTools.WriteFile,
+            fileTools.SearchFiles,
+            fileTools.GetWorkDirectory,
+            dataTools.AnalyzeCsv,
+            dataTools.AnalyzeText,
+            dataTools.Calculate,
+            sysTools.GetCurrentTime,
+            sysTools.GetDiskUsage,
+            sysTools.GetSystemInfo
+        }
+    );
+
+var thread = await agent.CreateSessionAsync();
+
+Console.WriteLine("✅ Agent 준비 완료. 명령을 입력하라.\n");
 
 while (true)
 {
-    Console.WriteLine("\n📋 메뉴:");
-    Console.WriteLine("  1. 문서 로드");
-    Console.WriteLine("  2. 로드된 문서 목록");
-    Console.WriteLine("  3. 질문하기");
-    Console.WriteLine("  4. 모든 문서 제거");
-    Console.WriteLine("  5. 종료");
-    Console.Write("선택: ");
+    Console.Write("🧑 명령: ");
+    var input = Console.ReadLine()?.Trim();
 
-    var choice = Console.ReadLine()?.Trim();
+    if (string.IsNullOrWhiteSpace(input)) continue;
 
-    switch (choice)
+    if (input.ToLower() == "quit") break;
+
+    if (input.ToLower() == "help")
     {
-        case "1":
-            Console.Write("\n📁 문서 경로: ");
-            var path = Console.ReadLine()?.Trim();
-            if (!string.IsNullOrEmpty(path))
-            {
-                try { docManager.LoadDocument(path); }
-                catch (Exception ex) { Console.WriteLine($"❌ {ex.Message}"); }
-            }
-            break;
+        Console.WriteLine("""
 
-        case "2":
-            if (docManager.Documents.Count == 0)
-            {
-                Console.WriteLine("\n로드된 문서가 없다.");
-            }
-            else
-            {
-                Console.WriteLine($"\n📚 로드된 문서 ({docManager.Documents.Count}개):");
-                foreach (var doc in docManager.Documents)
-                    Console.WriteLine($"  • {doc.FileName} ({doc.TotalChunks}청크, {doc.TotalChars:N0}자)");
-            }
-            break;
-
-        case "3":
-            if (docManager.Documents.Count == 0)
-            {
-                Console.WriteLine("\n⚠️ 먼저 문서를 로드하라.");
-                break;
-            }
-            Console.Write("\n❓ 질문: ");
-            var question = Console.ReadLine()?.Trim();
-            if (!string.IsNullOrEmpty(question))
-            {
-                var result = await qaAgent.AskAsync(question);
-                if (result.Sources.Count > 0)
-                {
-                    Console.WriteLine("\n📖 출처:");
-                    foreach (var src in result.Sources)
-                        Console.WriteLine($"  • {src}");
-                }
-            }
-            break;
-
-        case "4":
-            docManager.RemoveAll();
-            Console.WriteLine("✅ 모든 문서가 제거되었다.");
-            break;
-
-        case "5":
-            Console.WriteLine("프로그램을 종료한다.");
-            return;
+                          예시 명령:
+                            - 파일 목록 보여줘
+                            - sales.csv 파일 분석해줘
+                            - 현재 시간 알려줘
+                            - 디스크 사용량은?
+                            - 1, 5, 8, 3, 9 의 평균과 합계 계산해줘
+                            - 오늘 날짜로 일일 보고서 파일 만들어줘
+                          """);
+        continue;
     }
+
+    Console.WriteLine();
+    Console.Write("🤖 Agent: ");
+
+    try
+    {
+        await foreach (var chunk in agent.RunStreamingAsync(input, thread))
+        {
+            if (!string.IsNullOrEmpty(chunk.Text))
+                Console.Write(chunk.Text);
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.Write($"❌ 오류: {ex.Message}");
+    }
+
+    Console.WriteLine("\n");
 }
 
-void CreateSampleDocument()
+Console.WriteLine("업무 자동화 Agent를 종료한다.");
+
+void CreateSampleData(FileTools ft)
 {
-    var sampleDir = "TestDocuments";
-    Directory.CreateDirectory(sampleDir);
-    var samplePath = Path.Combine(sampleDir, "sample.txt");
+    // 샘플 CSV 생성
+    ft.WriteFile("sales.csv", """
+                              월,매출,비용,이익
+                              1월,12500000,8000000,4500000
+                              2월,15800000,9200000,6600000
+                              3월,11200000,7800000,3400000
+                              4월,18900000,10500000,8400000
+                              5월,16700000,9800000,6900000
+                              6월,21300000,11200000,10100000
+                              """);
 
-    if (!File.Exists(samplePath))
-    {
-        File.WriteAllText(samplePath, """
-# C# 프로그래밍 가이드
+    // 샘플 보고서 생성
+    ft.WriteFile("template.txt", $"""
+                                  일일 업무 보고서
+                                  생성 일시: {DateTime.Now:yyyy년 MM월 dd일}
 
-## 비동기 프로그래밍
+                                  1. 주요 업무
+                                     - [내용 입력]
 
-C#은 async와 await 키워드를 통해 비동기 프로그래밍을 지원한다.
-비동기 코드를 동기 코드처럼 작성할 수 있게 해준다.
+                                  2. 완료 사항
+                                     - [내용 입력]
 
-주요 장점:
-- 응답성 개선: 오래 걸리는 작업 중에도 UI가 반응한다
-- 리소스 효율성: 스레드를 블록하지 않아 리소스를 절약한다
-- 확장성: 더 많은 동시 요청을 처리할 수 있다
+                                  3. 이슈 및 특이사항
+                                     - [내용 입력]
 
-예제 코드:
-public async Task<string> FetchDataAsync()
-{
-    using var client = new HttpClient();
-    return await client.GetStringAsync("https://api.example.com/data");
-}
+                                  4. 내일 계획
+                                     - [내용 입력]
+                                  """);
 
-## LINQ
-
-LINQ(Language Integrated Query)는 데이터 쿼리를 언어 수준에서 지원한다.
-컬렉션, 데이터베이스, XML 등 다양한 데이터 소스를 동일한 방식으로 다룬다.
-
-기본 사용법:
-var result = numbers.Where(n => n > 5).Select(n => n * 2).ToList();
-
-## 의존성 주입
-
-ASP.NET Core는 내장 DI 컨테이너를 제공한다.
-서비스의 생성과 수명 주기를 프레임워크가 관리한다.
-
-Singleton: 애플리케이션 수명 동안 하나의 인스턴스
-Scoped: HTTP 요청당 하나의 인스턴스
-Transient: 요청할 때마다 새 인스턴스
-""");
-        Console.WriteLine("📝 샘플 문서가 생성되었다: TestDocuments/sample.txt");
-        docManager.LoadDocument(samplePath);
-    }
+    Console.WriteLine("✅ 샘플 데이터 생성 완료 (sales.csv, template.txt)\n");
 }

@@ -475,6 +475,58 @@ public class DocumentQAAgent
 
 ---
 
+## Chapter 08 — 업무 자동화 (멀티 도구 + Sandbox) ★ MVP 직결
+
+**목표:** 파일·데이터·시스템 도구 11개 조합 + 안전한 파일 접근(sandbox).
+
+**강의 핵심:** FileTools/DataTools/SystemTools, CSV 분석(CsvHelper), 자연어 명령 → 도구 선택, 스트리밍. ※ 강의는 "안전 원칙"을 **선언만** 하고 코드로 강제 안 함(보안 구멍).
+
+### 내 코드 — SafePath sandbox (핵심)
+```csharp
+public class FileTools
+{
+    private readonly string _workDir;
+    private readonly string _workDirPrefix;
+
+    public FileTools(string? workDir = null)
+    {
+        var baseDir = workDir ?? Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "AutomationWorkspace");
+        _workDir       = Path.GetFullPath(baseDir);              // ① base 정규화
+        _workDirPrefix = EnsureTrailingSeparator(_workDir);     // ② 끝에 구분자 보장
+        Directory.CreateDirectory(_workDir);
+    }
+
+    private static string EnsureTrailingSeparator(string path)
+    {
+        var full = Path.GetFullPath(path);
+        return full.EndsWith(Path.DirectorySeparatorChar) || full.EndsWith(Path.AltDirectorySeparatorChar)
+            ? full : full + Path.DirectorySeparatorChar;
+    }
+
+    private bool IsSafePath(string path)                        // ③ 공통 관문
+        => Path.GetFullPath(path).StartsWith(_workDirPrefix, StringComparison.OrdinalIgnoreCase);
+
+    public string ReadFile(string fileName)
+    {
+        var path = Path.Combine(_workDir, fileName);
+        if (!IsSafePath(path)) return $"❌ 안전하지 않은 경로: {fileName}";
+        // ... File.ReadAllText
+    }
+    // WriteFile도 동일 가드. SearchFiles는 GetFiles(...).Where(IsSafePath)
+}
+```
+
+**핵심 포인트 / 함정**
+- **프롬프트 안전 ≠ 코드 강제**: 에이전트가 `../` 거부해도 그건 LLM(지시)이지 코드 아님 → 우회 가능. 신뢰 경계는 코드로 enforce.
+- **prefix 함정**: `StartsWith(_workDir)`는 형제폴더 `..-evil` 통과 → base 끝에 **구분자** 붙여 비교.
+- **defense-in-depth**: 모든 파일 접근 지점(Read/Write/Search)에 같은 `IsSafePath`.
+- **멀티 도구**: 인스턴스 메서드 delegate가 인스턴스(상태) 캡처.
+- **OneDrive 함정**: `MyDocuments`가 `OneDrive\문서`로 리다이렉트될 수 있음.
+- 남은 엣지: `GetFullPath`는 심링크 미해석(고급).
+
+---
+
 ## 한 장 요약
 
 | 챕터 | 한 일 | 핵심 API/개념 |
@@ -486,3 +538,4 @@ public class DocumentQAAgent
 | 05 | 영속화 | `Serialize/DeserializeSessionAsync`, 단기≠장기 |
 | 06 | 스트리밍·미들웨어 | `RunStreamingAsync`, yield 패스스루 래퍼 |
 | 07 | 실전 RAG | 청킹·키워드검색·주입·출처, 지연 세션 초기화 |
+| 08 | 업무 자동화·Sandbox | 멀티 도구, `IsSafePath`(GetFullPath+구분자 StartsWith) |
