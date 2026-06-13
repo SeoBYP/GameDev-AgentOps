@@ -1,58 +1,109 @@
 ﻿using DotNetEnv;
+using Microsoft.Extensions.Logging;
+using Serilog;
+using AutomationAgent;
 using GameDev_AgentOps;
-using Microsoft.Agents.AI;
-using Microsoft.Agents.AI.OpenAI;
-using MultiAgent;
-using OpenAI;
-using AIAgentBuilder = GameDev_AgentOps.AIAgentBuilder;
 
 Env.Load();
 
-Console.WriteLine("🤖 Multi-Agent Workflow 데모");
-Console.WriteLine(new string('=', 60));
-Console.WriteLine("1. 순차 보고서 생성 Workflow");
-Console.WriteLine("2. 병렬 분석 Workflow");
-Console.WriteLine("3. 조건부 라우팅 Workflow");
-Console.Write("\n선택 (1/2/3): ");
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .WriteTo.Console(outputTemplate:
+        "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .WriteTo.File(
+        "logs/agent-.log",
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 30,
+        outputTemplate:
+        "[{Timestamp:yyyy-MM-dd HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
+    .CreateLogger();
 
-
-var choice = Console.ReadLine()?.Trim();
-
-switch (choice)
+using var loggerFactory = LoggerFactory.Create(builder =>
 {
-    case "1":
-        Console.Write("\n보고서 주제를 입력하라: ");
-        var topic = Console.ReadLine() ?? "AI 에이전트 기술 동향";
+    builder.AddSerilog(Log.Logger);
+});
 
-        var reportWorkflow = new ReportGenerationWorkflow();
-        var report = await reportWorkflow.GenerateReportAsync(topic);
+var logger = loggerFactory.CreateLogger<Program>();
 
-        // 보고서 저장
-        var fileName = $"report_{DateTime.Now:yyyyMMdd_HHmmss}.md";
-        File.WriteAllText(fileName, report);
-        Console.WriteLine($"\n\n💾 보고서 저장됨: {fileName}");
+logger.LogInformation("ProductionAgent 시작");
+
+var baseAgent = AIAgentBuilder.FromEnvironment()
+    .Build("ProductionAgent", "프로덕션 레벨의 안정적인 어시스턴트다.");
+
+var resilientAgent = new ResilientAgent(baseAgent, logger);
+var rateLimiter = new RateLimiter(maxConcurrent: 3, maxPerMinute: 18);
+var metrics = new AgentMetrics();
+
+Console.WriteLine("✅ ProductionAgent 준비 완료");
+Console.WriteLine("종료: quit | 메트릭: stats");
+Console.WriteLine();
+
+while (true)
+{
+    Console.Write("💬 입력: ");
+    var input = Console.ReadLine()?.Trim();
+
+    if (string.IsNullOrWhiteSpace(input))
+        continue;
+
+    if (input.Equals("quit", StringComparison.OrdinalIgnoreCase))
         break;
-    case "2":
-        Console.Write("\n분석 주제를 입력하라: ");
-        var analysisTopic = Console.ReadLine() ?? "C#과 Go의 게임 서버 적합성 비교";
 
-        var parallelWorkflow = new ParallelAnalysisWorkflow();
-        await parallelWorkflow.AnalyzeAsync(analysisTopic);
-        break;
+    if (input.Equals("stats", StringComparison.OrdinalIgnoreCase))
+    {
+        metrics.PrintReport();
+        continue;
+    }
 
-    case "3":
-        Console.WriteLine("\n조건부 라우팅 테스트 (종료: quit)");
-        var routingWorkflow = new ConditionalRoutingWorkflow();
+    var validation = InputValidator.Validate(input);
+    if (!validation.isValid)
+    {
+        Console.WriteLine($"⚠️ {validation.error}");
+        Console.WriteLine();
+        continue;
+    }
 
-        while (true)
-        {
-            Console.Write("\n❓ 질문: ");
-            var question = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(question) || question == "quit") break;
-            await routingWorkflow.ProcessAsync(question);
-        }
-        break;
-    default:
-        Console.WriteLine("잘못된 선택이다.");
-        break;
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+
+    try
+    {
+        var (response, success) = await rateLimiter.ExecuteAsync(async () =>
+            await resilientAgent.SafeRunAsync(input));
+
+        sw.Stop();
+
+        if (success)
+            metrics.RecordSuccess(sw.ElapsedMilliseconds);
+        else
+            metrics.RecordFailure();
+
+        Console.WriteLine();
+        Console.WriteLine($"🤖 Agent: {response}");
+        Console.WriteLine();
+    }
+    catch (InvalidOperationException ex)
+    {
+        sw.Stop();
+        metrics.RecordFailure();
+
+        logger.LogWarning(ex, "RateLimiter에서 요청 차단");
+        Console.WriteLine();
+        Console.WriteLine($"⚠️ {ex.Message}");
+        Console.WriteLine();
+    }
+    catch (Exception ex)
+    {
+        sw.Stop();
+        metrics.RecordFailure();
+
+        logger.LogError(ex, "예상치 못한 오류");
+        Console.WriteLine();
+        Console.WriteLine($"❌ 오류: {ex.Message}");
+        Console.WriteLine();
+    }
 }
+
+metrics.PrintReport();
+logger.LogInformation("ProductionAgent 종료");
+
+Log.CloseAndFlush();

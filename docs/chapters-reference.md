@@ -571,6 +571,55 @@ AgentResponse result = routing.Text.Contains("COMPLEX")   // ⚠️ 취약
 
 ---
 
+## Chapter 10 — 프로덕션 준비 (운영성)
+
+**목표:** 로깅·재시도·레이트리밋·메트릭으로 프로토타입을 운영형으로.
+
+**강의 핵심:** Serilog 로깅, Polly 재시도, 타임아웃, 입력검증, Rate Limiting, 캐싱, 메트릭, Docker. ※ 강의는 `HttpRequestException` 가정 — 네 스택은 `ClientResultException`.
+
+### 내 코드 — ResilientAgent (예외 타입이 핵심)
+```csharp
+using System.ClientModel;   // ★ ClientResultException
+
+public class ResilientAgent
+{
+    private readonly AsyncRetryPolicy<string> _retryPolicy;
+
+    public ResilientAgent(AIAgent agent, ILogger logger)
+    {
+        _retryPolicy = Policy<string>
+            .Handle<ClientResultException>(IsRetryableClientError)   // ★ HttpRequestException 아님
+            .Or<TimeoutException>()
+            .WaitAndRetryAsync(3, attempt => TimeSpan.FromSeconds(Math.Pow(2, attempt)), ...);
+    }
+
+    public async Task<(string response, bool success)> SafeRunAsync(string input)
+    {
+        try { return (await RunWithRetryAsync(input), true); }
+        catch (ClientResultException ex) when (ex.Status == 401) { ... }   // ★ .Status(int)
+        catch (ClientResultException ex) when (ex.Status == 402) { ... }
+        catch (ClientResultException ex) when (ex.Status == 429) { ... }
+        // ...
+    }
+
+    // 429·5xx만 재시도, 401/402는 제외(기다려도 안 풀림)
+    private static bool IsRetryableClientError(ClientResultException ex)
+        => ex.Status is 429 or 500 or 502 or 503 or 504;
+}
+```
+
+`RateLimiter`: `SemaphoreSlim`(동시성) + `Queue<DateTime>` 슬라이딩윈도우(`maxPerMinute: 18` < 무료 20). `AgentMetrics`: `Interlocked` 카운터 + `Interlocked.Read`. `LoggedAgent`: 구조화 로깅 데코레이터.
+
+**핵심 포인트 / 함정**
+- **예외 타입**: OpenAI 클라이언트는 `ClientResultException`(`HttpRequestException` 아님). `ex.Status`(int)로 분기. **429·5xx 재시도, 401/402 비재시도**.
+- **구조화 로깅**: `{RequestId}` 등 프로퍼티 → 검색 가능. **Rate Limiting**으로 429 선제 차단.
+- **타임아웃**: `Task.WhenAny` 방치 ❌ → `CancellationToken`을 `RunAsync`에 넘겨 실제 취소.
+- **인젝션 블록리스트는 보조**(우회 쉬움), 길이·빈입력 검증은 유용.
+- **캐싱**: `Dictionary`는 스레드 비안전 → 동시 사용 시 `ConcurrentDictionary`, 실패는 캐시 금지.
+- Docker/appsettings/헬스체크는 ASP.NET/컨테이너 영역(콘솔 범위 밖, 개념만).
+
+---
+
 ## 한 장 요약
 
 | 챕터 | 한 일 | 핵심 API/개념 |
@@ -584,3 +633,4 @@ AgentResponse result = routing.Text.Contains("COMPLEX")   // ⚠️ 취약
 | 07 | 실전 RAG | 청킹·키워드검색·주입·출처, 지연 세션 초기화 |
 | 08 | 업무 자동화·Sandbox | 멀티 도구, `IsSafePath`(GetFullPath+구분자 StartsWith) |
 | 09 | Multi-Agent | 순차/병렬(`Task.WhenAll`)/조건, stateless 출력 전달 |
+| 10 | 프로덕션 | `ClientResultException`+`.Status` 재시도, 레이트리밋, 메트릭 |

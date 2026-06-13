@@ -279,6 +279,30 @@ flowchart LR
 
 ---
 
+## Chapter 10 — 프로덕션 준비 (운영성)
+
+### ★ 핵심 — 예외 타입이 다르다
+강의의 재시도/에러처리는 `HttpRequestException`을 노리지만, **OpenAI 호환 클라이언트는 `System.ClientModel.ClientResultException`을 던진다**(ch03의 402가 그것). → Polly·catch를 `ClientResultException`로, 상태코드는 문자열이 아니라 **`ex.Status`(int)** 로 판별. **429·5xx만 재시도, 401/402는 비재시도**(키·잔액은 기다려도 안 풀림).
+
+### 운영성 빌딩블록
+- **구조화 로깅(Serilog)**: 값을 문자열로 박지 않고 `{RequestId}` 같은 **구조화 프로퍼티**로 → 검색·추적 가능한 로그.
+- **지수 백오프**: 2→4→8s, 회복 시간 부여 + thundering herd 방지.
+- **타임아웃**: `Task.WhenAny` 방치 ❌ → `CancellationToken`을 `RunAsync`에 넘겨 실제 요청 **취소**.
+- **Rate Limiting**: 클라이언트가 스스로 속도 제한(`maxPerMinute`를 무료 한도 아래로) → 429 선제 차단.
+- **메트릭**: `Interlocked` 카운터 + `Interlocked.Read` → 성공률·평균지연(KPI).
+- **캐싱**: 결정적 질의에만, `Dictionary`는 스레드 비안전 → 동시 사용 시 `ConcurrentDictionary`.
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| 재시도·catch가 안 걸림 | `HttpRequestException` 노림 — 실제는 `ClientResultException` | 예외 타입 교체 + `ex.Status`로 분기 |
+| 인젝션 블록리스트 맹신 | `Contains("ignore...")`는 우회 쉬움 | 보조 수단으로만, 권한 분리(sandbox)가 본질 |
+| `RunResult`/`object thread` | 1.9.0 불일치 | `AgentResponse`/`AgentSession?` |
+
+> **운영화 = 프로토타입 → 제품 문턱.** 로깅·재시도·레이트리밋·메트릭이 보고서의 운영성 KPI(p95·성공률·캐시효과)를 측정 가능하게 만든다.
+
+---
+
 ## 관통하는 교훈
 
 > **"문서·튜토리얼에 적힌 것"이 아니라 "내 환경이 실제로 가진 것"을 확인하라.**

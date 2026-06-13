@@ -16,6 +16,12 @@
         <None Update=".env">
             <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
         </None>
+        <PackageReference Include="Microsoft.Extensions.Logging" Version="11.0.0-preview.5.26302.115" />
+        <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="11.0.0-preview.5.26302.115" />
+        <PackageReference Include="Polly" Version="8.7.0" />
+        <PackageReference Include="Serilog.Extensions.Logging" Version="10.0.0" />
+        <PackageReference Include="Serilog.Sinks.Console" Version="6.1.1" />
+        <PackageReference Include="Serilog.Sinks.File" Version="8.0.0-nblumhardt-02322" />
         <PackageReference Include="UglyToad.PdfPig" Version="1.7.0-custom-5" />
     </ItemGroup>
     
