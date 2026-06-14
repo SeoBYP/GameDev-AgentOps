@@ -1,28 +1,8 @@
 using System.Text.Json;
-using Microsoft.Agents.AI;
 
-var builder = WebApplication.CreateBuilder(args);
+var app = WebApplication.Create(args);
 
-// Add services to the container.
-builder.Services.AddControllersWithViews();
-
-var app = builder.Build();
-
-// Configure the HTTP request pipeline.
-if (!app.Environment.IsDevelopment())
-{
-    app.UseExceptionHandler("/Home/Error");
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
-    app.UseHsts();
-}
-
-app.UseRouting();
-
-app.UseAuthorization();
-
-app.MapStaticAssets();
-
-
+// ★ MCP 핵심 1: 도구 목록(스키마)
 app.MapGet("/tools", () => new
 {
     tools = new[]
@@ -49,16 +29,12 @@ app.MapPost("/tools/call", async (HttpContext ctx) =>
     return Results.Json(new { content = new[] { new { type = "text", text = result } } });
 });
 
-// 도구 본체 — 여기는 네가 채워봐
+app.Run("http://localhost:5100");
+
+// 도구 본체 (순수 함수, LLM 없음)
 static string DoCalculate(JsonElement root)
 {
     var expr = root.GetProperty("arguments").GetProperty("expression").GetString() ?? "";
     var dt = new System.Data.DataTable();
-    return $"{expr} = {dt.Compute(expr, "")}";   // ← 이게 전부. LLM 없음.
+    return $"{expr} = {dt.Compute(expr, "")}";
 }
-app.MapControllerRoute(
-        name: "default",
-        pattern: "{controller=Home}/{action=Index}/{id?}")
-    .WithStaticAssets();
-
-app.Run("http://localhost:5100");
