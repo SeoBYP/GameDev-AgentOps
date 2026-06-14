@@ -620,6 +620,63 @@ public class ResilientAgent
 
 ---
 
+## Chapter 11 — MCP (Model Context Protocol) ★ MVP 직결
+
+**목표:** 도구를 별도 서버 프로세스로 분리해 표준 프로토콜로 호출.
+
+**강의 핵심:** MCP(Host/Client/Server, Resources/Tools/Prompts), 모델 동적 선택, Fallback, Ollama, 실전 팁. ※ 강의의 HTTP "MCP"는 개념용(진짜는 JSON-RPC 2.0 + 공식 C# SDK).
+
+### 내 코드 — HTTP MCP (서버 + 클라이언트, 2개 프로젝트)
+```csharp
+// [서버] GameDev-AgentOps.McpServer/Program.cs (Microsoft.NET.Sdk.Web)
+app.MapGet("/tools", () => new { tools = new[] {
+    new { name = "calculate", description = "수식 계산" }, /* ... */ } });
+
+app.MapPost("/tools/call", async (HttpContext ctx) => {
+    var req = await JsonDocument.ParseAsync(ctx.Request.Body);
+    var name = req.RootElement.GetProperty("name").GetString();
+    string result = name switch {
+        "calculate" => DoCalculate(req.RootElement),   // ★ 순수 함수, LLM 없음
+        _ => "알 수 없는 도구"
+    };
+    return Results.Json(new { content = new[] { new { type = "text", text = result } } });
+});
+app.Run("http://localhost:5100");   // ★ 포트 고정, HTTPS 리다이렉트 없음
+
+static string DoCalculate(JsonElement root) {
+    var expr = root.GetProperty("arguments").GetProperty("expression").GetString() ?? "";
+    return $"{expr} = {new System.Data.DataTable().Compute(expr, "")}";
+}
+
+// [클라이언트] McpClientTools.cs (콘솔) — 도구를 "갖지 않고" HTTP로 요청만
+public class McpClientTools {
+    private readonly HttpClient _http = new();
+    [Description("수식을 계산한다.")]
+    public Task<string> Calculate(string expression) => Call("calculate", new { expression });
+    private async Task<string> Call(string name, object arguments) {
+        var resp = await _http.PostAsync("http://localhost:5100/tools/call",
+            new StringContent(JsonSerializer.Serialize(new { name, arguments }), Encoding.UTF8, "application/json"));
+        using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync());
+        return doc.RootElement.GetProperty("content")[0].GetProperty("text").GetString() ?? "";
+    }
+}
+
+// [콘솔] 에이전트에 등록 (두뇌는 여기에만)
+Env.Load();
+var mcp = new McpClientTools();
+var agent = AIAgentBuilder.FromEnvironment()
+    .Build("McpAgent", "...", new Delegate[] { mcp.GetSystemInfo, mcp.Calculate });
+```
+
+**핵심 포인트 / 함정**
+- **두뇌(클라이언트 LLM) ↔ 손발(서버 도구)**: 서버 도구는 순수 함수(LLM 넣지 말 것). 클라이언트 래퍼는 도구를 *갖지 않고* HTTP 요청만 → **서버 떠 있어야 동작**.
+- **왜 분리?** 단일 도구엔 과함. **재사용·언어독립·독립배포·격리**가 필요할 때(= Unity+Unreal 공용 도구) 가치.
+- **별도 웹 프로젝트** 필요(`dotnet new web`). 콘솔과 **서로 참조 안 함**(HTTP로만).
+- 연결 안 되면: 포트(`app.Run("http://localhost:5100")`) + HTTPS 리다이렉트 제거.
+- 진짜 MCP = JSON-RPC 2.0 + 공식 `ModelContextProtocol` SDK.
+
+---
+
 ## 한 장 요약
 
 | 챕터 | 한 일 | 핵심 API/개념 |
@@ -634,3 +691,4 @@ public class ResilientAgent
 | 08 | 업무 자동화·Sandbox | 멀티 도구, `IsSafePath`(GetFullPath+구분자 StartsWith) |
 | 09 | Multi-Agent | 순차/병렬(`Task.WhenAll`)/조건, stateless 출력 전달 |
 | 10 | 프로덕션 | `ClientResultException`+`.Status` 재시도, 레이트리밋, 메트릭 |
+| 11 | MCP | 도구를 별도 서버로 분리, 두뇌(클라)↔손발(서버), HTTP 호출 |

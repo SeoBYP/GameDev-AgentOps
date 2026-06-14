@@ -303,6 +303,38 @@ flowchart LR
 
 ---
 
+## Chapter 11 — MCP (Model Context Protocol) ★ MVP 직결
+
+### MCP의 본질 — 도구를 별도 프로세스로 분리
+ch04 도구는 같은 프로세스의 C# 함수. MCP는 도구를 **별도 서버 프로세스**로 빼서 표준 프로토콜로 연결.
+```
+일반 Tool:  Agent → C# 함수 (한 프로세스)
+MCP Tool:   Agent(클라이언트) → HTTP → MCP 서버(별도 프로세스) → 실제 실행
+```
+
+### 두뇌 ↔ 손발 (핵심 개념)
+- **클라이언트(콘솔) = 두뇌(LLM)**: 도구를 *요청*만. 래퍼(`McpClientTools`)는 HTTP 심부름꾼 — 도구를 *갖고 있지 않음*.
+- **서버(웹) = 손발**: 도구의 실제 구현. **LLM 없음**(계산기 도구에 에이전트 넣으면 거꾸로!).
+- 브라우저(클라이언트) ↔ 웹사이트(서버) 관계. 서버 안 떠 있으면 연결 거부.
+
+### 왜 분리? (단일 도구엔 과함, 공유/격리에서 가치)
+1. **재사용**: 한 서버를 여러 에이전트(Unity·Unreal·Claude Desktop)가 공유.
+2. **언어/프레임워크 독립**: 표준 프로토콜로 느슨한 결합.
+3. **독립 배포**: 도구 수정 시 에이전트 재빌드 불필요.
+4. **격리/보안**: 도구가 자기 프로세스·권한(ch08 sandbox)에서 — 사고 반경 격리.
+
+### 트러블슈팅
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| 클라이언트 연결 거부 | 서버 포트 미스매치(`app.Run()`이 launchSettings 포트) + HTTPS 리다이렉트 | `app.Run("http://localhost:5100")` + `UseHttpsRedirection` 제거 |
+| 두뇌를 손발에 넣음 | 서버 도구 안에서 `AIAgentBuilder` 호출 | 서버 도구는 순수 함수(`dt.Compute`), LLM은 클라이언트에만 |
+| 키 미로딩 | `Env.Load()` 누락 | `FromEnvironment()` 전에 `Env.Load()` |
+| 웹 프로젝트 필요 | 콘솔(`Microsoft.NET.Sdk`)에 ASP.NET 못 넣음 | 별도 `Microsoft.NET.Sdk.Web` 프로젝트 |
+
+> 강의의 HTTP "MCP"는 개념 학습용 — **진짜 MCP는 JSON-RPC 2.0 + 공식 `ModelContextProtocol` C# SDK.** GameDev AgentOps 실제 Unity/Unreal 공용 도구 계층은 그걸로.
+
+---
+
 ## 관통하는 교훈
 
 > **"문서·튜토리얼에 적힌 것"이 아니라 "내 환경이 실제로 가진 것"을 확인하라.**
