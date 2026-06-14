@@ -1,0 +1,36 @@
+# Unity 자동 생성 폴더 (커밋 금지 — 수 GB / 머신 종속)
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+[Mm]emoryCaptures/
+[Rr]ecordings/
+
+# Asset .meta 는 추적해야 하나, 무시된 에셋의 .meta 는 함께 무시
+!/[Aa]ssets/**/*.meta
+
+# 루트 .gitignore 의 `**/Packages/*`(.NET NuGet용)가 Unity 패키지 매니페스트를
+# 잘못 무시함 → 되살린다. 이 둘은 패키지 의존성 기록이라 반드시 추적해야 함.
+!/Packages/manifest.json
+!/Packages/packages-lock.json
+
+# Unity 충돌 리포트
+sysinfo.txt
+crashlytics-build.properties
+
+# 빌드 산출물
+*.apk
+*.aab
+*.unitypackage
+*.app
+
+# IDE 프로젝트 파일 (Unity 가 재생성 — 추적 불필요)
+.vs/
+.vsconfig
+.idea/
+*.csproj
+*.sln
+*.user
