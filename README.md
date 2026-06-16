@@ -91,5 +91,12 @@
 
 이 프로젝트는 **Microsoft Agent Framework(C#) 학습 과정**(Agent Loop · Tool Calling · Session · RAG · Multi-Agent · MCP)을 바닥부터 구현하며 익힌 원리를 토대로 합니다. 학습 단계 코드(`GameDev-AgentOps/`, `GameDev-AgentOps.McpServer/`)와 상세 기록은 별도 문서에 정리되어 있습니다.
 
+**학습 기록**
 - 📖 [학습 여정 (문제→원인→해결)](docs/learning-journey.md)
 - 📑 [챕터별 코드 레퍼런스](docs/chapters-reference.md)
+
+**참고한 자료**
+- 🎓 [jacking75/edu_microsoft_agent_framework_book](https://github.com/jacking75/edu_microsoft_agent_framework_book) — 챕터별(01~11) C# 튜토리얼. 본 학습 단계가 이 책을 따라 진행됨.
+- 🎮 [jacking75/edu_microsoft_agent_framework](https://github.com/jacking75/edu_microsoft_agent_framework) — 게임 개발 15스테이지 커리큘럼·목표 아키텍처. MVP 방향의 참고.
+- 🧩 [microsoft/agent-framework](https://github.com/microsoft/agent-framework) — Microsoft Agent Framework 공식 레포 (`Microsoft.Agents.AI`).
+- 📚 [Microsoft Agent Framework 공식 문서](https://learn.microsoft.com/en-us/agent-framework/) — Microsoft Learn.
