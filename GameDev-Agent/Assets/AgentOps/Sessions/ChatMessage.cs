@@ -4,7 +4,7 @@
     public class ChatMessage
     {
         public string role;     // "user" | "assistant"
-        public string content;
+        public object content;
     }
 
 }

@@ -15,7 +15,7 @@ namespace AgentOps.Sessions
             this.messages = new List<ChatMessage>();
         }
         
-        public void AddMessage(string role, string content)
+        public void AddMessage(string role, object content)
             => messages.Add(new ChatMessage { role = role, content = content });
         
         public void AddMessage(ChatMessage message)

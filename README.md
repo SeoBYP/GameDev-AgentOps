@@ -3,6 +3,10 @@
 > **Unity Editor 안에서 살아 움직이는 게임 개발 전용 AI 에이전트.**
 > Claude를 Unity에 직접 심어, 로그 분석·데이터 검증·문서 질의 같은 반복적인 개발 운영(AgentOps) 작업을 에디터를 떠나지 않고 자동화합니다.
 
+![GameDev AgentOps 데모](assets/s3-agent-hitl-demo.gif)
+
+> 위 데모(S3): Claude가 Unity 씬을 읽고(`read_active_scene`), 명령에 따라 GameObject를 생성하며(`create_gameobject`), **쓰기 작업은 사용자 승인(HITL)** 을 거친다. 읽기는 자동 허용, 쓰기는 허용/거부.
+
 ---
 
 ## ✨ 무엇을 만드나
@@ -49,8 +53,8 @@
 | 단계 | 내용 | 상태 |
 |------|------|------|
 | **S1** | Hello Claude in Unity — 에디터 채팅 창에서 Claude 단발 호출·응답 | ✅ 완료 |
-| **S2** | 멀티턴 대화 + 스트리밍 실시간 출력 | 🔜 진행 예정 |
-| **S3** | Tool 루프 + Unity 도구(로그 읽기 등) + 실행 승인(HITL) | ⏳ 계획 |
+| **S2** | 멀티턴 대화 + 스트리밍 실시간 출력 | ✅ 완료 |
+| **S3** | Tool 루프 + Unity 도구(씬 읽기·GameObject 생성) + 실행 승인(HITL) | ✅ 완료 |
 | **S4** | 작업별 Skills 로딩 + 역할 분담 Multi-Agent 팀 | ⏳ 계획 |
 
 장기 목표: Unity 로그 파서 · 데이터(CSV/밸런스) 검증 · 기획 문서 RAG · MCP 공용 도구 계층을 갖춘 **게임 개발 AgentOps 허브**.
