@@ -22,6 +22,7 @@ namespace AgentOps.Editor
         private ScrollView _transcript; // 메시지 말풍선이 위로 쌓이는 영역
         private AgentSession _session;
         private int _approval; // 도구 승인 상태: 0=대기중 / 1=허용 / -1=거부
+        private AgentProfile _profile = AgentProfiles.Builder; // 현재 모드(도구 권한)
 
         [MenuItem("Window/AgentOps/Chat")]
         public static void Open()
@@ -39,6 +40,12 @@ namespace AgentOps.Editor
             root.style.paddingBottom = 8;
             root.style.paddingLeft = 8;
             root.style.paddingRight = 8;
+
+            // 0) 모드 드롭다운 (에이전트 프로필 = 도구 권한)
+            var modeDropdown = new DropdownField("모드", AgentProfiles.Names(), 1); // 기본 Builder
+            modeDropdown.RegisterValueChangedCallback(evt => _profile = AgentProfiles.ByName(evt.newValue));
+            modeDropdown.style.marginBottom = 6;
+            root.Add(modeDropdown);
 
             // 1) 대화 transcript — AddMessage() 가 여기에 말풍선을 추가한다.
             _transcript = new ScrollView(ScrollViewMode.Vertical);
@@ -261,7 +268,7 @@ namespace AgentOps.Editor
                     max_tokens = settings.maxTokens,
                     system = BuildSystemPrompt(),
                     messages = _session.GetMessages(),
-                    tools = UnityTools.Definitions()
+                    tools = UnityTools.Definitions(_profile.allowedTools)
                 };
                 string json = JsonConvert.SerializeObject(body);
 
@@ -340,13 +347,14 @@ namespace AgentOps.Editor
             AddMessage("error", $"도구 호출이 너무 많아 중단했어요 (최대 {maxSteps}회).");
         }
 
-        // system 프롬프트: 에이전트 역할 + 사용 가능한 Skills 목록.
-        private static string BuildSystemPrompt()
+        // system 프롬프트: 에이전트 역할 + 현재 모드 + 사용 가능한 Skills 목록.
+        private string BuildSystemPrompt()
         {
             return
                 "당신은 \"GameDev AgentOps\", Unity Editor 안에서 동작하는 게임 개발 보조 에이전트입니다.\n" +
                 "Unity 도구로 씬·콘솔 로그·컴파일 에러·파일을 읽고, 필요한 변경(GameObject 생성·파일 쓰기)은 도구로 수행합니다. 쓰기 작업은 사용자 승인이 필요합니다.\n" +
                 "추측하지 말고, 도구로 직접 확인한 사실에 근거해 답하세요.\n\n" +
+                _profile.systemAddendum + "\n\n" +
                 "## Skills (전문 지침)\n" +
                 "아래는 특정 작업용 상세 지침 목록입니다. 관련 작업이면 `load_skill` 도구로 먼저 해당 스킬을 불러와 그 절차를 따르세요.\n" +
                 SkillRegistry.Catalog();

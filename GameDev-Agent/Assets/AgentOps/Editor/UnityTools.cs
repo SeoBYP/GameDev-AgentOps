@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 using Unity.Plastic.Newtonsoft.Json.Linq;
 using UnityEditor;
@@ -117,6 +119,16 @@ namespace AgentOps.Editor
                 }
             }
         };
+
+        /// <summary>허용된 도구 이름 집합으로 필터링한 정의(프로필별 권한 분리). allowed=null 이면 전체.</summary>
+        public static object[] Definitions(HashSet<string> allowed)
+        {
+            if (allowed == null)
+                return Definitions();
+            return Definitions()
+                .Where(d => allowed.Contains((string)d.GetType().GetProperty("name").GetValue(d)))
+                .ToArray();
+        }
 
         /// <summary>이 도구가 실행 전 사용자 승인(HITL)을 받아야 하는가. read-only=자동 / write=승인(안전 기본값).</summary>
         public static bool RequiresApproval(string name) => name switch
