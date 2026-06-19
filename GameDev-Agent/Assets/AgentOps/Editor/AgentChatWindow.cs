@@ -1,5 +1,6 @@
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using AgentOps.Sessions;
 using Unity.EditorCoroutines.Editor;
 using Unity.Plastic.Newtonsoft.Json;
@@ -41,11 +42,21 @@ namespace AgentOps.Editor
             root.style.paddingLeft = 8;
             root.style.paddingRight = 8;
 
-            // 0) 모드 드롭다운 (에이전트 프로필 = 도구 권한)
+            // 0) 상단 줄: 모드 드롭다운(도구 권한) + 새 대화 버튼
+            var topRow = new VisualElement();
+            topRow.style.flexDirection = FlexDirection.Row;
+            topRow.style.marginBottom = 6;
+
             var modeDropdown = new DropdownField("모드", AgentProfiles.Names(), 1); // 기본 Builder
+            modeDropdown.style.flexGrow = 1;
             modeDropdown.RegisterValueChangedCallback(evt => _profile = AgentProfiles.ByName(evt.newValue));
-            modeDropdown.style.marginBottom = 6;
-            root.Add(modeDropdown);
+            topRow.Add(modeDropdown);
+
+            var newButton = new Button(NewChat) { text = "새 대화" };
+            topRow.Add(newButton);
+            topRow.Add(new Button(SaveSessionToFile) { text = "저장" });
+            topRow.Add(new Button(LoadSessionFromFile) { text = "불러오기" });
+            root.Add(topRow);
 
             // 1) 대화 transcript — AddMessage() 가 여기에 말풍선을 추가한다.
             _transcript = new ScrollView(ScrollViewMode.Vertical);
@@ -83,7 +94,7 @@ namespace AgentOps.Editor
             root.Add(inputRow);
             _inputField.Focus();
 
-            _session = new AgentSession(GUID.Generate().ToString(), AgentOpsSettings.GetOrCreate().model);
+            RestoreSession(); // 도메인 리로드 후 대화 복원(SessionState)
         }
 
         /// <summary>
@@ -121,6 +132,7 @@ namespace AgentOps.Editor
 
             var body = new Label(string.Empty);
             body.style.whiteSpace = WhiteSpace.Normal; // 자동 줄바꿈
+            body.enableRichText = false;               // 마크다운은 직접 정리 → rich text 끔(코드의 <> 안전)
             bubble.Add(body);
 
             _transcript.Add(bubble);
@@ -132,7 +144,7 @@ namespace AgentOps.Editor
         private void AddMessage(string role, string text)
         {
             var body = CreateBubble(role);
-            body.text = text;
+            body.text = role == "assistant" ? CleanMarkdown(text) : text; // 답변만 마크다운 정리
             ScrollToBottom();
         }
 
@@ -150,6 +162,28 @@ namespace AgentOps.Editor
         private void ScrollToBottom()
             => _transcript.schedule.Execute(() =>
                 _transcript.scrollOffset = new Vector2(0, float.MaxValue)).ExecuteLater(1);
+
+        // 마크다운을 읽기 좋은 평문으로 정리(rich text 미사용): 굵게(**)·백틱(`)·헤딩(#) 마커 제거.
+        private static string CleanMarkdown(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+                return s;
+            var lines = s.Replace("\r", "").Split('\n');
+            for (int i = 0; i < lines.Length; i++)
+            {
+                var l = lines[i].TrimStart();
+                if (l.StartsWith("#"))
+                    lines[i] = l.TrimStart('#').TrimStart(); // 헤딩 마커 제거
+            }
+            return string.Join("\n", lines).Replace("**", "").Replace("`", "").TrimEnd();
+        }
+
+        // API 에러 본문(JSON)에서 error.message 만 뽑아 깔끔히. 파싱 실패 시 원문.
+        private static string ExtractError(string raw)
+        {
+            try { return (string)(JObject.Parse(raw)["error"]?["message"]) ?? raw; }
+            catch { return raw; }
+        }
 
         // 도구 실행 승인 요청 UI (도구명 + 입력 + 허용/거부 버튼). 버튼이 _approval 을 0→1/-1 로 바꾼다.
         private void AddApprovalRequest(string toolName, string inputPreview)
@@ -237,6 +271,7 @@ namespace AgentOps.Editor
 
             AddMessage("user", prompt);            // UI: 유저 말풍선
             _session.AddMessage("user", prompt);   // 데이터: 세션에 누적
+            PersistSession();
 
             EditorCoroutineUtility.StartCoroutineOwnerless(AgentLoop());
 
@@ -284,8 +319,9 @@ namespace AgentOps.Editor
                 // (2) 실패 처리 — 본문에 원인이 들어있음
                 if (www.result != UnityWebRequest.Result.Success)
                 {
-                    Debug.LogError($"[AgentOps] {(long)www.responseCode} 실패\n{www.downloadHandler.text}");
-                    AddMessage("error", $"{(long)www.responseCode} 실패: {www.downloadHandler.text}");
+                    var raw = www.downloadHandler.text;
+                    Debug.LogError($"[AgentOps] {(long)www.responseCode} 실패\n{raw}");
+                    AddMessage("error", $"{(long)www.responseCode} 실패: {ExtractError(raw)}");
                     yield break;
                 }
 
@@ -293,6 +329,7 @@ namespace AgentOps.Editor
                 var res = JObject.Parse(www.downloadHandler.text);
                 var content = (JArray)res["content"];
                 _session.AddMessage("assistant", content);
+                PersistSession();
 
                 // (3a) 텍스트 블록은 화면 말풍선으로
                 foreach (var block in content)
@@ -342,6 +379,7 @@ namespace AgentOps.Editor
 
                 // (6) tool_result 들을 user 턴으로 넣고 루프 → Claude 가 결과 보고 이어감
                 _session.AddMessage("user", results);
+                PersistSession();
             }
 
             AddMessage("error", $"도구 호출이 너무 많아 중단했어요 (최대 {maxSteps}회).");
@@ -358,6 +396,108 @@ namespace AgentOps.Editor
                 "## Skills (전문 지침)\n" +
                 "아래는 특정 작업용 상세 지침 목록입니다. 관련 작업이면 `load_skill` 도구로 먼저 해당 스킬을 불러와 그 절차를 따르세요.\n" +
                 SkillRegistry.Catalog();
+        }
+
+        // --- 세션 영속(도메인 리로드 생존): SessionState 에 JSON 으로 저장/복원 ---
+        private const string SessionKey = "agentops.session";
+
+        // 현재 대화를 SessionState 에 저장 (컴파일/도메인 리로드를 넘어 유지).
+        private void PersistSession()
+        {
+            try { SessionState.SetString(SessionKey, JsonConvert.SerializeObject(_session.GetMessages())); }
+            catch { /* 직렬화 실패는 무시 — 연속성은 best-effort */ }
+        }
+
+        // 저장된 대화가 있으면 복원하고 말풍선을 다시 그린다. 없으면 새 세션.
+        private void RestoreSession()
+        {
+            var model = AgentOpsSettings.GetOrCreate().model;
+            _session = new AgentSession(GUID.Generate().ToString(), model);
+
+            var json = SessionState.GetString(SessionKey, "");
+            if (string.IsNullOrEmpty(json))
+                return;
+
+            try
+            {
+                var msgs = JsonConvert.DeserializeObject<List<ChatMessage>>(json);
+                if (msgs == null)
+                    return;
+                foreach (var m in msgs)
+                    _session.AddMessage(m);
+                RebuildTranscript(msgs);
+            }
+            catch { /* 손상된 저장은 무시하고 빈 대화로 */ }
+        }
+
+        // 저장된 메시지로 transcript(말풍선) 재구성 — 텍스트 블록만 표시.
+        private void RebuildTranscript(List<ChatMessage> msgs)
+        {
+            foreach (var m in msgs)
+            {
+                if (m.content is string s)
+                {
+                    AddMessage(m.role == "user" ? "user" : "assistant", s);
+                }
+                else if (m.content is JArray arr)
+                {
+                    // assistant 의 text 블록만 표시(tool_use/tool_result 는 지나간 도구 호출이라 생략)
+                    foreach (var block in arr)
+                        if ((string)block["type"] == "text")
+                            AddMessage("assistant", (string)block["text"]);
+                }
+            }
+        }
+
+        // 새 대화: 저장 비우고 세션·화면 초기화.
+        private void NewChat()
+        {
+            SessionState.EraseString(SessionKey);
+            _session = new AgentSession(GUID.Generate().ToString(), AgentOpsSettings.GetOrCreate().model);
+            _transcript.Clear();
+        }
+
+        // --- Layer 2: 이름 붙여 파일로 저장/불러오기 (에디터 재시작 후에도 유지) ---
+        // 프로젝트 루트/AgentOpsSessions/ — Assets 밖이라 Unity 가 임포트하지 않음.
+        private static string SessionsDir()
+        {
+            var dir = Path.Combine(Directory.GetParent(Application.dataPath).FullName, "AgentOpsSessions");
+            if (!Directory.Exists(dir))
+                Directory.CreateDirectory(dir);
+            return dir;
+        }
+
+        private void SaveSessionToFile()
+        {
+            var path = EditorUtility.SaveFilePanel("세션 저장", SessionsDir(), "session", "json");
+            if (string.IsNullOrEmpty(path))
+                return; // 취소
+            File.WriteAllText(path, JsonConvert.SerializeObject(_session.GetMessages()));
+        }
+
+        private void LoadSessionFromFile()
+        {
+            var path = EditorUtility.OpenFilePanel("세션 불러오기", SessionsDir(), "json");
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            try
+            {
+                var msgs = JsonConvert.DeserializeObject<List<ChatMessage>>(File.ReadAllText(path));
+                if (msgs == null)
+                    return;
+
+                _session = new AgentSession(GUID.Generate().ToString(), AgentOpsSettings.GetOrCreate().model);
+                _transcript.Clear();
+                foreach (var m in msgs)
+                    _session.AddMessage(m);
+                RebuildTranscript(msgs);
+                PersistSession(); // 불러온 대화를 현재 연속성(SessionState)에도 반영
+            }
+            catch
+            {
+                AddMessage("error", "세션 파일을 불러오지 못했습니다 (형식 오류).");
+            }
         }
     }
 }
