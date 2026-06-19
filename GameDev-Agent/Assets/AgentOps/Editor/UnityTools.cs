@@ -75,6 +75,20 @@ namespace AgentOps.Editor
             },
             new
             {
+                name = "load_skill",
+                description = "특정 작업용 상세 지침(Skill)을 불러온다. system 프롬프트의 'Skills' 목록에 있는 이름을 사용. 관련 작업을 시작하기 전에 먼저 호출하라.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        name = new { type = "string", description = "불러올 스킬 이름" }
+                    },
+                    required = new[] { "name" }
+                }
+            },
+            new
+            {
                 name = "write_file",
                 description = "Assets/ 폴더 밑에 텍스트 파일을 생성하거나 덮어쓴다. C# 스크립트(.cs)도 생성 가능. 경로는 프로젝트 루트 기준(예: Assets/Scripts/Player.cs).",
                 input_schema = new
@@ -111,6 +125,7 @@ namespace AgentOps.Editor
             "read_console_logs"  => false,
             "get_compile_errors" => false,
             "read_text_file"     => false,
+            "load_skill"         => false,
             _                    => true   // create_gameobject 등 write/미지의 도구 → 승인
         };
 
@@ -129,6 +144,8 @@ namespace AgentOps.Editor
                     return AgentOpsLog.CompileErrors();
                 case "read_text_file":
                     return ReadTextFile((string)input["path"]);
+                case "load_skill":
+                    return SkillRegistry.Load((string)input["name"]);
                 case "write_file":
                     return WriteFile((string)input["path"], (string)input["content"]);
                 case "create_gameobject":

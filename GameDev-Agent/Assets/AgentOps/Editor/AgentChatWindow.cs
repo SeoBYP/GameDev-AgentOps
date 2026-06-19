@@ -259,6 +259,7 @@ namespace AgentOps.Editor
                 {
                     model = _session.GetModel(),
                     max_tokens = settings.maxTokens,
+                    system = BuildSystemPrompt(),
                     messages = _session.GetMessages(),
                     tools = UnityTools.Definitions()
                 };
@@ -337,6 +338,18 @@ namespace AgentOps.Editor
             }
 
             AddMessage("error", $"도구 호출이 너무 많아 중단했어요 (최대 {maxSteps}회).");
+        }
+
+        // system 프롬프트: 에이전트 역할 + 사용 가능한 Skills 목록.
+        private static string BuildSystemPrompt()
+        {
+            return
+                "당신은 \"GameDev AgentOps\", Unity Editor 안에서 동작하는 게임 개발 보조 에이전트입니다.\n" +
+                "Unity 도구로 씬·콘솔 로그·컴파일 에러·파일을 읽고, 필요한 변경(GameObject 생성·파일 쓰기)은 도구로 수행합니다. 쓰기 작업은 사용자 승인이 필요합니다.\n" +
+                "추측하지 말고, 도구로 직접 확인한 사실에 근거해 답하세요.\n\n" +
+                "## Skills (전문 지침)\n" +
+                "아래는 특정 작업용 상세 지침 목록입니다. 관련 작업이면 `load_skill` 도구로 먼저 해당 스킬을 불러와 그 절차를 따르세요.\n" +
+                SkillRegistry.Catalog();
         }
     }
 }
