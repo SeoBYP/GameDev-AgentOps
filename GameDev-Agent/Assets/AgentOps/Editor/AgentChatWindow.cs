@@ -273,37 +273,39 @@ namespace AgentOps.Editor
             _session.AddMessage("user", prompt);   // 데이터: 세션에 누적
             PersistSession();
 
-            EditorCoroutineUtility.StartCoroutineOwnerless(AgentLoop());
+            EditorCoroutineUtility.StartCoroutineOwnerless(RunAgent(_session, _profile, "", null));
 
             _inputField.value = string.Empty; // 입력창 비우기
             _inputField.Focus();
         }
 
         /// <summary>
-        /// 에이전트 루프: tool_use 가 끝날 때까지(end_turn) 반복 호출.
-        /// 매 회 messages 가 늘어나므로 요청을 새로 만들어 보낸다. (비스트리밍)
+        /// 에이전트 루프(범용): 주어진 session·profile 로 tool_use 가 끝날 때까지 반복.
+        /// main 에이전트와 (S4c) sub-agent 가 공유. 최종 답변 텍스트는 onFinalText 로 전달.
         /// </summary>
-        private IEnumerator AgentLoop()
+        private IEnumerator RunAgent(AgentSession session, AgentProfile profile, string label, System.Action<string> onFinalText)
         {
             var key = AgentOpsSettings.ApiKey;
             var settings = AgentOpsSettings.GetOrCreate();
             if (string.IsNullOrWhiteSpace(key))
             {
                 AddMessage("error", "API 키가 비어 있습니다. Window > AgentOps > Settings 에서 입력하세요.");
+                onFinalText?.Invoke("[오류] API 키 없음");
                 yield break;
             }
 
+            var pfx = string.IsNullOrEmpty(label) ? "" : $"↳ [{label}] "; // sub-agent 활동 표시
             const int maxSteps = 6; // 무한 도구 호출 방지(ch10 감각)
             for (int step = 0; step < maxSteps; step++)
             {
                 // (1) 매 회 새 요청 — messages 가 늘어나고, UnityWebRequest 는 재사용 불가.
                 var body = new
                 {
-                    model = _session.GetModel(),
+                    model = session.GetModel(),
                     max_tokens = settings.maxTokens,
-                    system = BuildSystemPrompt(),
-                    messages = _session.GetMessages(),
-                    tools = UnityTools.Definitions(_profile.allowedTools)
+                    system = BuildSystemPrompt(profile),
+                    messages = session.GetMessages(),
+                    tools = UnityTools.Definitions(profile.allowedTools)
                 };
                 string json = JsonConvert.SerializeObject(body);
 
@@ -322,23 +324,32 @@ namespace AgentOps.Editor
                     var raw = www.downloadHandler.text;
                     Debug.LogError($"[AgentOps] {(long)www.responseCode} 실패\n{raw}");
                     AddMessage("error", $"{(long)www.responseCode} 실패: {ExtractError(raw)}");
+                    onFinalText?.Invoke($"[오류] {ExtractError(raw)}");
                     yield break;
                 }
 
                 // (3) 응답 파싱 — content 는 블록 배열(JArray). 통째로 세션에 저장(다음 호출에 포함).
                 var res = JObject.Parse(www.downloadHandler.text);
                 var content = (JArray)res["content"];
-                _session.AddMessage("assistant", content);
-                PersistSession();
+                session.AddMessage("assistant", content);
+                if (session == _session) PersistSession(); // main 세션만 영속(sub 는 일회성)
 
-                // (3a) 텍스트 블록은 화면 말풍선으로
+                // (3a) 텍스트 블록은 화면 말풍선으로 + 최종 텍스트 누적
+                string turnText = "";
                 foreach (var block in content)
                     if ((string)block["type"] == "text")
-                        AddMessage("assistant", (string)block["text"]);
+                    {
+                        var t = (string)block["text"];
+                        AddMessage("assistant", pfx + t);
+                        turnText += (turnText.Length > 0 ? "\n" : "") + t;
+                    }
 
                 // (4) 도구를 안 부르면(end_turn 등) 끝.
                 if ((string)res["stop_reason"] != "tool_use")
+                {
+                    onFinalText?.Invoke(turnText);
                     yield break;
+                }
 
                 // (5) tool_use 블록마다 실행 → tool_result 모으기
                 var results = new List<object>();
@@ -350,6 +361,24 @@ namespace AgentOps.Editor
                     var name = (string)block["name"];
                     var input = (JObject)block["input"];
                     var toolUseId = (string)block["id"];
+
+                    // (S4c) delegate: sub-agent 를 중첩 실행하고 그 최종 답을 결과로 받아온다.
+                    if (name == "delegate")
+                    {
+                        var agentName = (string)input["agent"];
+                        var task = (string)input["task"];
+                        var subProfile = AgentProfiles.ForDelegate(agentName);
+                        AddMessage("assistant", pfx + $"↳ {agentName} 에게 위임: {task}");
+
+                        var subSession = new AgentSession(GUID.Generate().ToString(), session.GetModel());
+                        subSession.AddMessage("user", task);
+
+                        string subResult = null;
+                        yield return RunAgent(subSession, subProfile, agentName, r => subResult = r); // 중첩 루프
+
+                        results.Add(new { type = "tool_result", tool_use_id = toolUseId, content = subResult ?? "(빈 결과)" });
+                        continue;
+                    }
 
                     // (HITL) 승인 필요한 도구면 사용자 결정을 기다린다.
                     if (UnityTools.RequiresApproval(name))
@@ -371,28 +400,29 @@ namespace AgentOps.Editor
                         }
                     }
 
-                    AddMessage("assistant", $"🔧 도구 실행: {name}"); // UI 표시
+                    AddMessage("assistant", pfx + $"🔧 도구 실행: {name}"); // UI 표시
                     string output = UnityTools.Run(name, input);       // ← Unity 도구 실행
 
                     results.Add(new { type = "tool_result", tool_use_id = toolUseId, content = output });
                 }
 
                 // (6) tool_result 들을 user 턴으로 넣고 루프 → Claude 가 결과 보고 이어감
-                _session.AddMessage("user", results);
-                PersistSession();
+                session.AddMessage("user", results);
+                if (session == _session) PersistSession();
             }
 
             AddMessage("error", $"도구 호출이 너무 많아 중단했어요 (최대 {maxSteps}회).");
+            onFinalText?.Invoke("[중단] 도구 호출 한도 초과");
         }
 
-        // system 프롬프트: 에이전트 역할 + 현재 모드 + 사용 가능한 Skills 목록.
-        private string BuildSystemPrompt()
+        // system 프롬프트: 에이전트 역할 + 모드(profile) + 사용 가능한 Skills 목록.
+        private string BuildSystemPrompt(AgentProfile profile)
         {
             return
                 "당신은 \"GameDev AgentOps\", Unity Editor 안에서 동작하는 게임 개발 보조 에이전트입니다.\n" +
                 "Unity 도구로 씬·콘솔 로그·컴파일 에러·파일을 읽고, 필요한 변경(GameObject 생성·파일 쓰기)은 도구로 수행합니다. 쓰기 작업은 사용자 승인이 필요합니다.\n" +
                 "추측하지 말고, 도구로 직접 확인한 사실에 근거해 답하세요.\n\n" +
-                _profile.systemAddendum + "\n\n" +
+                profile.systemAddendum + "\n\n" +
                 "## Skills (전문 지침)\n" +
                 "아래는 특정 작업용 상세 지침 목록입니다. 관련 작업이면 `load_skill` 도구로 먼저 해당 스킬을 불러와 그 절차를 따르세요.\n" +
                 SkillRegistry.Catalog();

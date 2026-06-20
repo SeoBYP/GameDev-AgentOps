@@ -43,10 +43,28 @@ namespace AgentOps.Editor
             allowedTools = null // 전체
         };
 
-        public static readonly AgentProfile[] All = { Triage, Builder };
+        public static readonly AgentProfile Coordinator = new AgentProfile
+        {
+            name = "Coordinator (위임)",
+            systemAddendum =
+                "현재 모드: **Coordinator**. 직접 작업하지 말고 전문 sub-agent에게 `delegate` 도구로 위임하라. " +
+                "분석·조사는 Triage 에게, 생성·수정은 Builder 에게 위임하고, 받은 결과를 종합해 최종 답을 하라. " +
+                "sub-agent는 사용자 원문을 보지 못하므로 위임 task는 구체적으로 적어라.",
+            allowedTools = new HashSet<string>
+            {
+                "read_active_scene", "read_console_logs", "get_compile_errors",
+                "read_text_file", "load_skill", "delegate"
+            }
+        };
+
+        public static readonly AgentProfile[] All = { Triage, Builder, Coordinator };
 
         public static List<string> Names() => All.Select(p => p.name).ToList();
 
         public static AgentProfile ByName(string name) => All.FirstOrDefault(p => p.name == name) ?? Builder;
+
+        // 위임 대상 이름(Claude가 적은 agent 인자) → 프로필. triage 외엔 Builder.
+        public static AgentProfile ForDelegate(string agent)
+            => !string.IsNullOrEmpty(agent) && agent.ToLower().Contains("triage") ? Triage : Builder;
     }
 }

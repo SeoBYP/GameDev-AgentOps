@@ -91,6 +91,21 @@ namespace AgentOps.Editor
             },
             new
             {
+                name = "delegate",
+                description = "전문 sub-agent에게 작업을 위임하고 그 결과를 받는다. agent: 'Triage'(읽기·분석) 또는 'Builder'(생성·수정). task: sub-agent가 수행할 구체적 작업. Coordinator 모드에서만 사용.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        agent = new { type = "string", description = "위임 대상: Triage 또는 Builder" },
+                        task = new { type = "string", description = "수행할 구체적 작업 설명" }
+                    },
+                    required = new[] { "agent", "task" }
+                }
+            },
+            new
+            {
                 name = "write_file",
                 description = "Assets/ 폴더 밑에 텍스트 파일을 생성하거나 덮어쓴다. C# 스크립트(.cs)도 생성 가능. 경로는 프로젝트 루트 기준(예: Assets/Scripts/Player.cs).",
                 input_schema = new
@@ -138,6 +153,7 @@ namespace AgentOps.Editor
             "get_compile_errors" => false,
             "read_text_file"     => false,
             "load_skill"         => false,
+            "delegate"           => false, // 위임 자체는 승인 X (sub 의 write 는 sub-loop 에서 승인)
             _                    => true   // create_gameobject 등 write/미지의 도구 → 승인
         };
 
