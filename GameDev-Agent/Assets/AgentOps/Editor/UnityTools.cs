@@ -191,6 +191,36 @@ namespace AgentOps.Editor
                     },
                     required = new[] { "target", "component" }
                 }
+            },
+            new
+            {
+                name = "create_primitive",
+                description = "화면에 보이는 기본 도형 GameObject 를 생성한다(MeshFilter·MeshRenderer·Collider 포함). shape: Cube|Sphere|Capsule|Cylinder|Plane|Quad.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        shape = new { type = "string", description = "Cube / Sphere / Capsule / Cylinder / Plane / Quad" },
+                        name = new { type = "string", description = "생성할 이름(선택, 기본은 도형 이름)" }
+                    },
+                    required = new[] { "shape" }
+                }
+            },
+            new
+            {
+                name = "set_primitive_mesh",
+                description = "기존 GameObject 를 기본 도형 모양으로 '보이게' 만든다. MeshFilter 의 mesh 와 MeshRenderer 의 material 을 해당 프리미티브 것으로 설정(없으면 컴포넌트 추가). 빈 오브젝트를 화면에 표시할 때 사용.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        target = new { type = "string", description = "GameObject 이름 또는 경로" },
+                        shape = new { type = "string", description = "Cube / Sphere / Capsule / Cylinder / Plane / Quad" }
+                    },
+                    required = new[] { "target", "shape" }
+                }
             }
         };
 
@@ -249,6 +279,11 @@ namespace AgentOps.Editor
                     return AddComponent((string)input["target"], (string)input["component"]);
                 case "remove_component":
                     return RemoveComponent((string)input["target"], (string)input["component"]);
+                case "create_primitive":
+                    return CreatePrimitive((string)input["shape"],
+                        input["name"] != null ? (string)input["name"] : null);
+                case "set_primitive_mesh":
+                    return SetPrimitiveMesh((string)input["target"], (string)input["shape"]);
                 default:
                     return $"[오류] 알 수 없는 도구: {name}";
             }
@@ -501,6 +536,64 @@ namespace AgentOps.Editor
             Undo.DestroyObjectImmediate(comp);
             EditorSceneManager.MarkSceneDirty(go.scene);
             return $"'{go.name}' 에서 컴포넌트 '{type.Name}' 를 제거했습니다.";
+        }
+
+        // 도형 이름 → PrimitiveType.
+        private static bool TryParsePrimitive(string shape, out PrimitiveType type)
+        {
+            type = PrimitiveType.Cube;
+            if (string.IsNullOrWhiteSpace(shape)) return false;
+            switch (shape.Trim().ToLowerInvariant())
+            {
+                case "cube":     type = PrimitiveType.Cube;     return true;
+                case "sphere":   type = PrimitiveType.Sphere;   return true;
+                case "capsule":  type = PrimitiveType.Capsule;  return true;
+                case "cylinder": type = PrimitiveType.Cylinder; return true;
+                case "plane":    type = PrimitiveType.Plane;    return true;
+                case "quad":     type = PrimitiveType.Quad;     return true;
+                default: return false;
+            }
+        }
+
+        // --- create_primitive (write): 보이는 기본 도형 생성 ---
+        private static string CreatePrimitive(string shape, string goName)
+        {
+            if (!TryParsePrimitive(shape, out var type))
+                return $"알 수 없는 도형: '{shape}'. (Cube/Sphere/Capsule/Cylinder/Plane/Quad)";
+
+            var go = GameObject.CreatePrimitive(type);
+            if (!string.IsNullOrWhiteSpace(goName))
+                go.name = goName;
+            Undo.RegisterCreatedObjectUndo(go, "Create " + go.name);
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return $"{type} 프리미티브 '{go.name}' 를 생성했습니다 (MeshFilter·MeshRenderer·Collider 포함).";
+        }
+
+        // --- set_primitive_mesh (write): 기존 GameObject 를 도형 모양으로 보이게 ---
+        private static string SetPrimitiveMesh(string target, string shape)
+        {
+            var go = FindGameObject(target);
+            if (go == null)
+                return $"'{target}' GameObject 를 찾지 못했습니다.";
+            if (!TryParsePrimitive(shape, out var type))
+                return $"알 수 없는 도형: '{shape}'. (Cube/Sphere/Capsule/Cylinder/Plane/Quad)";
+
+            // 빌트인 메시·머티리얼은 임시 프리미티브에서 가져온다.
+            var temp = GameObject.CreatePrimitive(type);
+            var mesh = temp.GetComponent<MeshFilter>().sharedMesh;
+            var mat = temp.GetComponent<MeshRenderer>().sharedMaterial;
+            UnityEngine.Object.DestroyImmediate(temp);
+
+            var mf = go.GetComponent<MeshFilter>() ?? Undo.AddComponent<MeshFilter>(go);
+            var mr = go.GetComponent<MeshRenderer>() ?? Undo.AddComponent<MeshRenderer>(go);
+
+            Undo.RecordObject(mf, "Set Mesh");
+            mf.sharedMesh = mesh;
+            Undo.RecordObject(mr, "Set Material");
+            mr.sharedMaterial = mat;
+
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return $"'{go.name}' 를 {type} 모양으로 보이게 했습니다 (MeshFilter mesh + MeshRenderer material 설정).";
         }
     }
 }
