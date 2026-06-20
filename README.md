@@ -7,6 +7,8 @@
 
 > 위 데모: **Coordinator** 모드에서 한 번의 요청으로 — Triage가 씬을 분석하고, Builder가 GameObject 생성·컴포넌트 부착까지 위임받아 처리한다. 모든 쓰기는 **사용자 승인(HITL)** 을 거치고, 결과는 Coordinator가 종합한다.
 
+> 📄 **[포트폴리오 문서 →](docs/portfolio.md)** — 어필 포인트·핵심 구현·학습 배경 정리
+
 ---
 
 ## ✨ 무엇을 만드나
