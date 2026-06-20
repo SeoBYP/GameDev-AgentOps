@@ -9,7 +9,7 @@
 
 ---
 
-## 📌 한눈에
+## 한눈에
 
 | 항목 | 내용 |
 |------|------|
@@ -22,7 +22,7 @@
 
 ---
 
-## 🎯 어필 포인트 — 이 프로젝트로 증명하는 역량
+## 어필 포인트 — 이 프로젝트로 증명하는 역량
 
 | # | 역량 | 무엇으로 보여주나 |
 |---|------|------------------|
@@ -35,7 +35,7 @@
 
 ---
 
-## 🧩 핵심 구현 (기술 깊이)
+## 핵심 구현 (기술 깊이)
 
 **에이전트 루프 (`tool_use`)** — 매 턴 `messages`를 키워 Claude 호출 → `stop_reason == "tool_use"`면 도구 실행 후 `tool_result`를 다음 user 턴으로 회신 → 반복. `max_tokens`·무한루프 가드까지 직접 관리.
 
@@ -43,33 +43,33 @@
 
 **스트리밍 (SSE)** — `DownloadHandlerScript`를 상속한 파서로 `content_block_delta`를 실시간 표시하면서, `content_block_start`/`input_json_delta`/`message_delta`로 **tool_use·stop_reason을 재구성**해 루프에 넘김.
 
-**권한 모델 (이중 게이트)** — ① **도구 존재**: 모드별 허용 목록으로 필터(읽기전용 모드는 쓰기 도구를 아예 못 봄) ② **실행 승인**: 쓰기 도구는 코루틴을 멈추고 사용자 결정을 대기. 승인 정책(쓰기만 확인/전부 자동/전부 확인) 선택 가능.
+**권한 모델 (이중 게이트)** — (1) **도구 존재**: 모드별 허용 목록으로 필터(읽기전용 모드는 쓰기 도구를 아예 못 봄) (2) **실행 승인**: 쓰기 도구는 코루틴을 멈추고 사용자 결정을 대기. 승인 정책(쓰기만 확인/전부 자동/전부 확인) 선택 가능.
 
 ---
 
-## 🧠 동작 방식
+## 동작 방식
 
 ![아키텍처](assets/architecture.svg)
 
-<sub>① 에이전트 코어(파랑): 채팅창 → Agent Loop ↔ Claude API → 도구, HITL 승인·프로필·Skills·세션영속 · ② 멀티에이전트(보라): Coordinator가 Triage/Builder sub-agent에 위임</sub>
+<sub>코어(파랑): 채팅창 → Agent Loop ↔ Claude API → 도구, HITL 승인·프로필·Skills·세션영속 · 멀티에이전트(보라): Coordinator가 Triage/Builder sub-agent에 위임</sub>
 
 <details><summary>텍스트 요약 다이어그램</summary>
 
 ```
-┌────────────────────── Unity Editor ──────────────────────┐
-│                                                          │
-│   채팅 UI (UI Toolkit)        Unity 컨텍스트/도구          │
-│   ┌──────────────┐           ┌───────────────────────┐   │
-│   │ 질문 / 명령  │──────────▶│ 씬·로그·에셋·컴포넌트  │   │
-│   └──────┬───────┘           └───────────▲───────────┘   │
-│          │                                │ (도구 실행)   │
-│          ▼                                │              │
-│   ┌──────────────────────────────────────┴───────────┐  │
-│   │   에이전트 루프 (요청 → tool_use → 결과 → 반복)    │  │
-│   └──────────────────────┬───────────────────────────┘  │
-└──────────────────────────┼──────────────────────────────┘
-                           │ x-api-key (EditorPrefs)
-                           ▼
++--------------------- Unity Editor ----------------------+
+|                                                         |
+|   채팅 UI (UI Toolkit)        Unity 컨텍스트/도구         |
+|   +--------------+           +----------------------+   |
+|   | 질문 / 명령  |---------->| 씬·로그·에셋·컴포넌트 |   |
+|   +------+-------+           +----------+-----------+   |
+|          |                              | (도구 실행)    |
+|          v                              |               |
+|   +--------------------------------------+-----------+  |
+|   |   에이전트 루프 (요청 -> tool_use -> 결과 -> 반복) |  |
+|   +-----------------------+--------------------------+  |
++--------------------------+------------------------------+
+                           | x-api-key (EditorPrefs)
+                           v
                  Anthropic Claude Messages API (SSE 스트리밍)
 ```
 
@@ -77,7 +77,7 @@
 
 ---
 
-## 🧰 에이전트 도구
+## 에이전트 도구
 
 ### 읽기 도구 — 자동 실행 (승인 불필요)
 | 도구 | 설명 |
@@ -108,7 +108,7 @@
 
 ---
 
-## 🛠 기술 스택
+## 기술 스택
 
 - **엔진/UI**: Unity (URP) · UI Toolkit · EditorWindow · Editor Coroutines
 - **LLM**: Anthropic Claude (`claude-opus-4-8` 기본, Sonnet/Haiku 전환) — Messages API 직접 호출, **SSE 스트리밍**
@@ -117,7 +117,7 @@
 
 ---
 
-## 🚀 시작하기
+## 시작하기
 
 1. `GameDev-Agent/`를 Unity Hub로 열기 (URP · Unity 2022.3+ / Unity 6)
 2. 메뉴 **Window → AgentOps → Settings** → Inspector의 **API Key** 칸에 Anthropic 키 입력
@@ -130,29 +130,29 @@
 
 ---
 
-## 🔐 보안 — API 키
+## 보안 — API 키
 
 키는 어떤 추적 파일에도 들어가지 않습니다. `ScriptableObject`는 비밀이 아닌 설정(`model`/`maxTokens`)만 담고, **API 키는 Unity EditorPrefs(`agentops.apiKey`)에만** 저장됩니다 → git 커밋 대상 아님. 파일 도구는 `Assets/` 밖을 막는 경로 샌드박스(`IsSafePath`)를 거칩니다.
 
 ---
 
-## 📚 배경
+## 배경
 
 **Microsoft Agent Framework(C#)** 의 에이전트 개념(Agent Loop · Tool Calling · Session · RAG · Multi-Agent · MCP)을 바닥부터 구현하며 익힌 원리를 토대로 합니다. 학습 단계 코드(`GameDev-AgentOps/`, `GameDev-AgentOps.McpServer/`)와 상세 기록은 별도 문서에 정리되어 있습니다.
 
 **학습 기록**
-- 📖 [학습 여정 (문제→원인→해결)](docs/learning-journey.md)
-- 📑 [챕터별 코드 레퍼런스](docs/chapters-reference.md)
+- [학습 여정 (문제→원인→해결)](docs/learning-journey.md)
+- [챕터별 코드 레퍼런스](docs/chapters-reference.md)
 
 **참고한 자료**
-- 🎓 [jacking75/edu_microsoft_agent_framework_book](https://github.com/jacking75/edu_microsoft_agent_framework_book) — 챕터별(01~11) C# 튜토리얼. 학습 단계가 이 자료를 따라 진행됨.
-- 🎮 [jacking75/edu_microsoft_agent_framework](https://github.com/jacking75/edu_microsoft_agent_framework) — 게임 개발 15스테이지 커리큘럼·목표 아키텍처. MVP 방향의 참고.
-- 🧩 [microsoft/agent-framework](https://github.com/microsoft/agent-framework) — Microsoft Agent Framework 공식 레포 (`Microsoft.Agents.AI`).
-- 📚 [Microsoft Agent Framework 공식 문서](https://learn.microsoft.com/en-us/agent-framework/) — Microsoft Learn.
+- [jacking75/edu_microsoft_agent_framework_book](https://github.com/jacking75/edu_microsoft_agent_framework_book) — 챕터별(01~11) C# 튜토리얼. 학습 단계가 이 자료를 따라 진행됨.
+- [jacking75/edu_microsoft_agent_framework](https://github.com/jacking75/edu_microsoft_agent_framework) — 게임 개발 15스테이지 커리큘럼·목표 아키텍처. MVP 방향의 참고.
+- [microsoft/agent-framework](https://github.com/microsoft/agent-framework) — Microsoft Agent Framework 공식 레포 (`Microsoft.Agents.AI`).
+- [Microsoft Agent Framework 공식 문서](https://learn.microsoft.com/en-us/agent-framework/) — Microsoft Learn.
 
 ---
 
-## 🔭 범위와 다음 단계
+## 범위와 다음 단계
 
 - 이 레포는 **원리를 진지하게 구현한 포폴 MVP** — 실제 배포 제품은 별도로 진행합니다. (예: `Unity.Plastic.Newtonsoft` 의존은 실배포 시 정식 패키지로 교체 예정)
 - 로드맵: Unity 로그 파서 · 데이터(CSV/밸런스) 검증 · 기획 문서 RAG · **MCP 공용 도구 계층**(JSON-RPC 2.0)으로 Unity/Unreal 공용화.
