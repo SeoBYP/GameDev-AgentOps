@@ -3,9 +3,9 @@
 > **Unity Editor 안에서 살아 움직이는 게임 개발 전용 AI 에이전트.**
 > Claude를 Unity에 직접 심어, 씬 조작·로그 분석·데이터 검증 같은 반복적인 개발 운영(AgentOps) 작업을 에디터를 떠나지 않고 자동화합니다.
 
-![GameDev AgentOps 데모](assets/s3-agent-hitl-demo.gif)
+![GameDev AgentOps — 멀티에이전트 데모](assets/s4-multiagent-demo.gif)
 
-> 위 데모: Claude가 Unity 씬을 읽고(`read_active_scene`), 명령에 따라 GameObject를 생성하며(`create_gameobject`), **쓰기 작업은 사용자 승인(HITL)** 을 거친다. 읽기는 자동 허용, 쓰기는 허용/거부.
+> 위 데모: **Coordinator** 모드에서 한 번의 요청으로 — Triage가 씬을 분석하고, Builder가 GameObject 생성·컴포넌트 부착까지 위임받아 처리한다. 모든 쓰기는 **사용자 승인(HITL)** 을 거치고, 결과는 Coordinator가 종합한다.
 
 ---
 
@@ -94,6 +94,10 @@
 | `write_file` | `Assets/` 밑 파일 생성·덮어쓰기 (`.cs` 포함, 샌드박스) |
 
 > 도구는 모두 `UnityTools.cs`에 정의되며, 모드별 `AgentProfiles`의 허용 목록으로 필터링됩니다.
+
+![HITL 승인 데모](assets/s3-agent-hitl-demo.gif)
+
+<sub>쓰기 도구(예: `create_gameobject`)는 실행 전 허용/거부를 묻는다 — 읽기는 자동, 쓰기는 사람이 승인.</sub>
 
 ---
 
