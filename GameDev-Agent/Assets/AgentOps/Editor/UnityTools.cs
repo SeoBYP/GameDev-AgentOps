@@ -37,6 +37,35 @@ namespace AgentOps.Editor
             },
             new
             {
+                name = "find_gameobjects",
+                description = "활성 씬에서 이름(부분 일치) 또는 컴포넌트 타입으로 GameObject 를 검색한다. 비활성 포함. 둘 다 선택(없으면 전체). 경로와 컴포넌트 목록을 반환. read_active_scene 보다 구체적으로 찾을 때 사용.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        name = new { type = "string", description = "이름 부분 일치(선택)" },
+                        component = new { type = "string", description = "컴포넌트 타입 이름 부분 일치, 예: Rigidbody, Collider, Camera (선택)" }
+                    },
+                    required = new string[] { }
+                }
+            },
+            new
+            {
+                name = "inspect_gameobject",
+                description = "특정 GameObject 의 상세 정보(경로·활성 상태·태그·레이어·Transform·컴포넌트 목록)를 반환한다. read_active_scene 이 못 주는 컴포넌트/속성을 확인할 때 사용.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        target = new { type = "string", description = "GameObject 이름 또는 전체 경로(예: Player/Weapon)" }
+                    },
+                    required = new[] { "target" }
+                }
+            },
+            new
+            {
                 name = "read_console_logs",
                 description = "Unity 콘솔의 최근 로그(런타임 Debug.Log/경고/에러/예외)를 읽는다. 에러 원인 분석(triage)에 사용.",
                 input_schema = new
@@ -132,6 +161,36 @@ namespace AgentOps.Editor
                     },
                     required = new[] { "name" }
                 }
+            },
+            new
+            {
+                name = "add_component",
+                description = "GameObject 에 컴포넌트를 추가한다. target: 이름 또는 경로. component: 컴포넌트 타입 이름(예: Rigidbody, BoxCollider, AudioSource). 빌트인·사용자 스크립트 모두 가능.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        target = new { type = "string", description = "GameObject 이름 또는 경로" },
+                        component = new { type = "string", description = "추가할 컴포넌트 타입 이름 (예: Rigidbody)" }
+                    },
+                    required = new[] { "target", "component" }
+                }
+            },
+            new
+            {
+                name = "remove_component",
+                description = "GameObject 에서 컴포넌트를 제거한다. target: 이름 또는 경로. component: 제거할 컴포넌트 타입 이름. Transform 은 제거 불가.",
+                input_schema = new
+                {
+                    type = "object",
+                    properties = new
+                    {
+                        target = new { type = "string", description = "GameObject 이름 또는 경로" },
+                        component = new { type = "string", description = "제거할 컴포넌트 타입 이름" }
+                    },
+                    required = new[] { "target", "component" }
+                }
             }
         };
 
@@ -149,6 +208,8 @@ namespace AgentOps.Editor
         public static bool RequiresApproval(string name) => name switch
         {
             "read_active_scene"  => false,
+            "find_gameobjects"   => false,
+            "inspect_gameobject" => false,
             "read_console_logs"  => false,
             "get_compile_errors" => false,
             "read_text_file"     => false,
@@ -164,6 +225,12 @@ namespace AgentOps.Editor
             {
                 case "read_active_scene":
                     return ReadActiveScene();
+                case "find_gameobjects":
+                    return FindGameObjects(
+                        input["name"] != null ? (string)input["name"] : null,
+                        input["component"] != null ? (string)input["component"] : null);
+                case "inspect_gameobject":
+                    return InspectGameObject((string)input["target"]);
                 case "read_console_logs":
                     return AgentOpsLog.RecentLogs(
                         input["count"] != null ? (int)input["count"] : 30,
@@ -178,6 +245,10 @@ namespace AgentOps.Editor
                     return WriteFile((string)input["path"], (string)input["content"]);
                 case "create_gameobject":
                     return CreateGameObject((string)input["name"]);
+                case "add_component":
+                    return AddComponent((string)input["target"], (string)input["component"]);
+                case "remove_component":
+                    return RemoveComponent((string)input["target"], (string)input["component"]);
                 default:
                     return $"[오류] 알 수 없는 도구: {name}";
             }
@@ -200,6 +271,88 @@ namespace AgentOps.Editor
             sb.AppendLine($"- {t.name}");
             foreach (Transform child in t)
                 AppendHierarchy(child, sb, depth + 1);
+        }
+
+        // 활성 씬의 모든 GameObject(비활성 포함). 각 루트의 자식 Transform 을 전부 훑는다.
+        private static IEnumerable<GameObject> AllInScene()
+        {
+            var scene = SceneManager.GetActiveScene();
+            foreach (var root in scene.GetRootGameObjects())
+                foreach (var t in root.GetComponentsInChildren<Transform>(true))
+                    yield return t.gameObject;
+        }
+
+        // 루트부터의 전체 경로(A/B/C).
+        private static string PathOf(Transform t)
+        {
+            var sb = new StringBuilder(t.name);
+            for (var p = t.parent; p != null; p = p.parent)
+                sb.Insert(0, p.name + "/");
+            return sb.ToString();
+        }
+
+        // --- find_gameobjects: 이름/컴포넌트로 검색 ---
+        private static string FindGameObjects(string nameQuery, string componentQuery)
+        {
+            const int max = 50;
+            var matches = new List<string>();
+            int total = 0;
+
+            foreach (var go in AllInScene())
+            {
+                if (!string.IsNullOrEmpty(nameQuery) &&
+                    go.name.IndexOf(nameQuery, StringComparison.OrdinalIgnoreCase) < 0)
+                    continue;
+                if (!string.IsNullOrEmpty(componentQuery) &&
+                    !go.GetComponents<Component>().Any(c => c != null &&
+                        c.GetType().Name.IndexOf(componentQuery, StringComparison.OrdinalIgnoreCase) >= 0))
+                    continue;
+
+                total++;
+                if (matches.Count < max)
+                {
+                    var comps = string.Join(", ", go.GetComponents<Component>()
+                        .Where(c => c != null).Select(c => c.GetType().Name));
+                    matches.Add($"- {PathOf(go.transform)}  [{comps}]");
+                }
+            }
+
+            if (total == 0)
+                return "조건에 맞는 GameObject 가 없습니다.";
+
+            var sb = new StringBuilder();
+            sb.AppendLine($"일치 {total}개" + (total > max ? $" (상위 {max}개만 표시)" : "") + ":");
+            foreach (var m in matches)
+                sb.AppendLine(m);
+            return sb.ToString();
+        }
+
+        // --- inspect_gameobject: 한 오브젝트의 컴포넌트·Transform 상세 ---
+        private static string InspectGameObject(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target))
+                return "[오류] target(이름/경로)이 비었습니다.";
+
+            var found = FindGameObject(target);
+            if (found == null)
+                return $"'{target}' 에 해당하는 GameObject 를 찾지 못했습니다.";
+
+            var t = found.transform;
+            var sb = new StringBuilder();
+            sb.AppendLine($"GameObject: {found.name}");
+            sb.AppendLine($"경로: {PathOf(t)}");
+            sb.AppendLine($"활성: self={found.activeSelf}, inHierarchy={found.activeInHierarchy}");
+            sb.AppendLine($"태그: {found.tag} / 레이어: {LayerMask.LayerToName(found.layer)}");
+            sb.AppendLine($"Transform: pos={t.localPosition}, rot(euler)={t.localEulerAngles}, scale={t.localScale}");
+            sb.AppendLine($"자식 {t.childCount}개");
+            sb.AppendLine("컴포넌트:");
+            foreach (var c in found.GetComponents<Component>())
+            {
+                if (c == null) { sb.AppendLine("  - (Missing Script)"); continue; }
+                var off = (c is Behaviour b && !b.enabled) ? " (비활성)" : "";
+                sb.AppendLine($"  - {c.GetType().Name}{off}");
+            }
+            return sb.ToString();
         }
 
         // --- read_text_file: Assets/ 밑 파일 읽기 (경로 샌드박스) ---
@@ -261,6 +414,93 @@ namespace AgentOps.Editor
             Undo.RegisterCreatedObjectUndo(go, "Create " + goName);
             EditorSceneManager.MarkSceneDirty(go.scene);
             return $"GameObject '{goName}' 를 생성했습니다.";
+        }
+
+        // 이름 또는 경로(A/B/C)로 활성 씬에서 GameObject 를 찾는다(정확 일치 → 이름 부분 일치 폴백).
+        private static GameObject FindGameObject(string target)
+        {
+            if (string.IsNullOrWhiteSpace(target))
+                return null;
+
+            bool byPath = target.IndexOf('/') >= 0;
+            foreach (var go in AllInScene())
+                if (byPath
+                    ? PathOf(go.transform).Equals(target, StringComparison.OrdinalIgnoreCase)
+                    : go.name.Equals(target, StringComparison.OrdinalIgnoreCase))
+                    return go;
+
+            foreach (var go in AllInScene())
+                if (go.name.IndexOf(target, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return go;
+
+            return null;
+        }
+
+        // 컴포넌트 타입 이름 → Type. UnityEngine 빌트인 우선, 없으면 로드된 어셈블리에서 Component 파생 검색.
+        private static Type ResolveComponentType(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            var builtin = typeof(Transform).Assembly.GetType("UnityEngine." + name, false, true);
+            if (builtin != null && typeof(Component).IsAssignableFrom(builtin))
+                return builtin;
+
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                Type[] types;
+                try { types = asm.GetTypes(); }
+                catch { continue; } // 일부 어셈블리는 로드 실패할 수 있음 — 건너뜀
+                foreach (var ty in types)
+                    if (typeof(Component).IsAssignableFrom(ty) &&
+                        (string.Equals(ty.Name, name, StringComparison.OrdinalIgnoreCase) ||
+                         string.Equals(ty.FullName, name, StringComparison.OrdinalIgnoreCase)))
+                        return ty;
+            }
+            return null;
+        }
+
+        // --- add_component (write): GameObject 에 컴포넌트 추가 ---
+        private static string AddComponent(string target, string component)
+        {
+            var go = FindGameObject(target);
+            if (go == null)
+                return $"'{target}' GameObject 를 찾지 못했습니다.";
+
+            var type = ResolveComponentType(component);
+            if (type == null)
+                return $"컴포넌트 타입 '{component}' 을(를) 찾지 못했습니다. (정확한 클래스명이 필요합니다)";
+            if (type == typeof(Transform))
+                return "Transform 은 모든 GameObject 에 이미 있어 추가할 수 없습니다.";
+
+            var comp = Undo.AddComponent(go, type);
+            if (comp == null)
+                return $"'{type.Name}' 추가에 실패했습니다 (중복 불가 컴포넌트일 수 있음).";
+
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return $"'{go.name}' 에 컴포넌트 '{type.Name}' 를 추가했습니다.";
+        }
+
+        // --- remove_component (write): GameObject 에서 컴포넌트 제거 ---
+        private static string RemoveComponent(string target, string component)
+        {
+            var go = FindGameObject(target);
+            if (go == null)
+                return $"'{target}' GameObject 를 찾지 못했습니다.";
+
+            var type = ResolveComponentType(component);
+            if (type == null)
+                return $"컴포넌트 타입 '{component}' 을(를) 찾지 못했습니다.";
+            if (type == typeof(Transform))
+                return "Transform 은 제거할 수 없습니다.";
+
+            var comp = go.GetComponent(type);
+            if (comp == null)
+                return $"'{go.name}' 에 '{type.Name}' 컴포넌트가 없습니다.";
+
+            Undo.DestroyObjectImmediate(comp);
+            EditorSceneManager.MarkSceneDirty(go.scene);
+            return $"'{go.name}' 에서 컴포넌트 '{type.Name}' 를 제거했습니다.";
         }
     }
 }

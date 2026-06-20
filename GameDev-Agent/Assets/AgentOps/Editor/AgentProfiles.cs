@@ -27,6 +27,8 @@ namespace AgentOps.Editor
             allowedTools = new HashSet<string>
             {
                 "read_active_scene",
+                "find_gameobjects",
+                "inspect_gameobject",
                 "read_console_logs",
                 "get_compile_errors",
                 "read_text_file",
@@ -52,7 +54,8 @@ namespace AgentOps.Editor
                 "sub-agent는 사용자 원문을 보지 못하므로 위임 task는 구체적으로 적어라.",
             allowedTools = new HashSet<string>
             {
-                "read_active_scene", "read_console_logs", "get_compile_errors",
+                "read_active_scene", "find_gameobjects", "inspect_gameobject",
+                "read_console_logs", "get_compile_errors",
                 "read_text_file", "load_skill", "delegate"
             }
         };
