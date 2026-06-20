@@ -7,7 +7,7 @@
   </defs>
 
   <text x="20" y="30" font-size="16" font-weight="700" fill="#e6e6ea">GameDev AgentOps — 아키텍처</text>
-  <text x="800" y="28" text-anchor="end" font-size="10.5" fill="#c08fd0">보라 = S4c 멀티에이전트</text>
+  <text x="800" y="28" text-anchor="end" font-size="10.5" fill="#c08fd0">보라 = 멀티에이전트</text>
 
   <!-- Region 1 -->
   <rect x="12" y="46" width="796" height="412" rx="10" fill="none" stroke="#3d3d44" stroke-dasharray="4 3"/>
@@ -57,7 +57,7 @@
 
   <!-- Region 2 -->
   <rect x="12" y="478" width="796" height="228" rx="10" fill="#c08fd0" fill-opacity="0.06" stroke="#c08fd0" stroke-width="1.5"/>
-  <text x="26" y="500" font-size="12" font-weight="700" fill="#c08fd0">② S4c — 멀티에이전트 위임</text>
+  <text x="26" y="500" font-size="12" font-weight="700" fill="#c08fd0">② 멀티에이전트 위임</text>
 
   <rect x="50" y="526" width="200" height="66" rx="8" fill="#2c2c31" stroke="#c08fd0" stroke-width="1.8"/>
   <text x="66" y="550" font-size="12.5" font-weight="700" fill="#e6e6ea">Coordinator 모드</text>
