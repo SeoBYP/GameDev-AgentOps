@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using AgentOps.Sessions;
 using Unity.EditorCoroutines.Editor;
 using Unity.Plastic.Newtonsoft.Json;
@@ -33,6 +34,8 @@ namespace AgentOps.Editor
         private TextField _sessionSearch;       // 세션 이름 검색
         private List<string> _allSessionNames = new List<string>();
         private string _sessionFile;            // 현재 대화의 자동저장 파일 경로(null=아직 미저장)
+        private Button _sendButton;             // 전송 버튼(처리 중 상태 반영)
+        private Label _statusLabel;             // "응답 중" 표시
 
         private static readonly string[] ModelChoices = { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5" };
         private static readonly string[] ApprovalChoices = { "쓰기만 확인", "전부 자동 승인", "전부 확인" };
@@ -136,21 +139,21 @@ namespace AgentOps.Editor
             _inputField.RegisterCallback<KeyDownEvent>(OnInputKeyDown, TrickleDown.TrickleDown);
             inputCard.Add(_inputField);
 
-            var sendButton = new Button(OnSend) { text = "↑" };
-            sendButton.style.width = 30;
-            sendButton.style.height = 30;
-            sendButton.style.marginLeft = 4;
-            sendButton.style.marginRight = 0;
-            sendButton.style.paddingTop = 0;
-            sendButton.style.paddingBottom = 0;
-            sendButton.style.paddingLeft = 0;
-            sendButton.style.paddingRight = 0;
-            sendButton.style.fontSize = 15;
-            sendButton.style.unityFontStyleAndWeight = FontStyle.Bold;
-            sendButton.style.color = Color.white;
-            sendButton.style.backgroundColor = new Color(0.85f, 0.46f, 0.34f); // Claude 코랄
-            SetBorderRadius(sendButton, 15);
-            SetBorder(sendButton, 0, Color.clear);
+            _sendButton = new Button(OnSend) { text = "↑" };
+            _sendButton.style.width = 30;
+            _sendButton.style.height = 30;
+            _sendButton.style.marginLeft = 4;
+            _sendButton.style.marginRight = 0;
+            _sendButton.style.paddingTop = 0;
+            _sendButton.style.paddingBottom = 0;
+            _sendButton.style.paddingLeft = 0;
+            _sendButton.style.paddingRight = 0;
+            _sendButton.style.fontSize = 15;
+            _sendButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+            _sendButton.style.color = Color.white;
+            _sendButton.style.backgroundColor = new Color(0.85f, 0.46f, 0.34f); // Claude 코랄
+            SetBorderRadius(_sendButton, 15);
+            SetBorder(_sendButton, 0, Color.clear);
             
             
             root.Add(inputCard); // 카드는 텍스트 영역만 담는다
@@ -187,7 +190,14 @@ namespace AgentOps.Editor
             controlSpacer.style.flexGrow = 1;
             controlBar.Add(controlSpacer);
 
-            controlBar.Add(sendButton);
+            _statusLabel = new Label("● 응답 중…");
+            _statusLabel.style.marginRight = 8;
+            _statusLabel.style.fontSize = 11;
+            _statusLabel.style.color = new Color(0.88f, 0.62f, 0.30f);
+            _statusLabel.style.display = DisplayStyle.None; // 처리 중에만 표시
+            controlBar.Add(_statusLabel);
+
+            controlBar.Add(_sendButton);
             root.Add(controlBar);
 
             _inputField.Focus();
@@ -240,52 +250,172 @@ namespace AgentOps.Editor
         }
 
         /// <summary>
-        /// 역할에 맞는 빈 말풍선을 만들어 transcript 에 추가하고, 본문(텍스트) Label 을 돌려준다.
-        /// role: "user"(우측·파랑) / "assistant"(좌측·회색) / "error"(좌측·빨강)
+        /// 역할 헤더(라벨)까지 만든 빈 메시지 컨테이너를 transcript 에 추가하고 돌려준다.
+        /// role: "user"(왼쪽 강조선) / "assistant" / "error"(빨강)
         /// </summary>
-        private Label CreateBubble(string role)
+        private VisualElement CreateItem(string role)
         {
             bool isUser = role == "user";
             bool isError = role == "error";
 
-            // Claude Code 식 평면 transcript — 역할 라벨 + 전체폭(말풍선 없음).
             var item = new VisualElement();
             item.style.marginBottom = 10;
-            item.style.paddingLeft = 4;
-            item.style.paddingRight = 4;
-            if (isUser) // 유저 입력만 왼쪽 강조선으로 살짝 구분
+
+            if (isUser)
             {
-                item.style.borderLeftWidth = 2;
-                item.style.borderLeftColor = new Color(0.35f, 0.55f, 0.90f);
-                item.style.paddingLeft = 8;
+                // 유저 메시지 = 오른쪽 정렬 말풍선(파랑, 내용에 맞게 hug)
+                item.style.alignSelf = Align.FlexEnd;
+                item.style.maxWidth = Length.Percent(80);
+                item.style.paddingTop = 6;
+                item.style.paddingBottom = 6;
+                item.style.paddingLeft = 10;
+                item.style.paddingRight = 10;
+                item.style.backgroundColor = new Color(0.20f, 0.34f, 0.52f);
+                SetBorderRadius(item, 10);
+            }
+            else
+            {
+                // 어시스턴트/에러 = 평면 좌측 + 역할 라벨(Claude Code 풍)
+                item.style.paddingLeft = 4;
+                item.style.paddingRight = 4;
+                var roleLabel = new Label(isError ? "Error" : "Claude");
+                roleLabel.style.fontSize = 10;
+                roleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+                roleLabel.style.color = isError
+                    ? new Color(0.90f, 0.45f, 0.45f)
+                    : new Color(0.55f, 0.80f, 0.60f);
+                roleLabel.style.marginBottom = 2;
+                item.Add(roleLabel);
             }
 
-            var roleLabel = new Label(isUser ? "You" : isError ? "Error" : "Claude");
-            roleLabel.style.fontSize = 10;
-            roleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            roleLabel.style.color =
-                isError ? new Color(0.90f, 0.45f, 0.45f) :
-                isUser ? new Color(0.45f, 0.65f, 1.00f) :
-                new Color(0.55f, 0.80f, 0.60f);
-            roleLabel.style.marginBottom = 2;
-            item.Add(roleLabel);
+            _transcript.Add(item);
+            return item;
+        }
 
+        // 단일 텍스트 Label 메시지를 만들어 본문 Label 을 돌려준다(유저/에러/스트리밍용).
+        private Label CreateBubble(string role)
+        {
+            var item = CreateItem(role);
             var body = new Label(string.Empty);
             body.style.whiteSpace = WhiteSpace.Normal; // 자동 줄바꿈
-            body.enableRichText = false;               // 마크다운은 직접 정리 → rich text 끔(코드의 <> 안전)
+            body.enableRichText = false;               // rich text 끔(코드의 <> 안전)
+            if (role == "user")
+                body.style.color = new Color(0.96f, 0.97f, 1.00f); // 파란 버블 위 흰 글씨
             item.Add(body);
-
-            _transcript.Add(item);
             ScrollToBottom();
             return body;
         }
 
-        // 완성된 메시지를 한 번에 추가 (유저/에러/응답 텍스트용).
+        // 완성된 메시지를 한 번에 추가. 어시스턴트 답변은 마크다운 표를 정렬 그리드로 렌더링.
         private void AddMessage(string role, string text)
         {
-            var body = CreateBubble(role);
-            body.text = role == "assistant" ? CleanMarkdown(text) : text; // 답변만 마크다운 정리
+            if (role == "assistant")
+            {
+                var item = CreateItem(role);
+                RenderAssistant(item, text);
+            }
+            else
+            {
+                var body = CreateBubble(role);
+                body.text = text;
+            }
             ScrollToBottom();
+        }
+
+        // 어시스턴트 텍스트를 줄 단위로 훑어 일반 텍스트 = Label, 마크다운 표 = 정렬 그리드로 렌더.
+        private void RenderAssistant(VisualElement container, string text)
+        {
+            var lines = (text ?? "").Replace("\r\n", "\n").Replace("\r", "").Split('\n');
+            var textRun = new List<string>();
+            var tableRun = new List<string>();
+
+            void FlushText()
+            {
+                if (textRun.Count == 0) return;
+                var t = CleanMarkdown(string.Join("\n", textRun)).Trim();
+                if (t.Length > 0)
+                {
+                    var lbl = new Label(t);
+                    lbl.style.whiteSpace = WhiteSpace.Normal;
+                    lbl.enableRichText = false;
+                    container.Add(lbl);
+                }
+                textRun.Clear();
+            }
+            void FlushTable()
+            {
+                if (tableRun.Count == 0) return;
+                VisualElement grid = tableRun.Count >= 2 ? BuildTableGrid(tableRun) : null;
+                if (grid != null) { container.Add(grid); tableRun.Clear(); return; }
+                textRun.AddRange(tableRun); // 표가 아니면 일반 텍스트로 되돌림
+                tableRun.Clear();
+                FlushText();
+            }
+
+            foreach (var line in lines)
+            {
+                bool isTableLine = line.IndexOf('|') >= 0 && line.Trim().Length > 0;
+                if (isTableLine) { FlushText(); tableRun.Add(line); }
+                else { FlushTable(); textRun.Add(line); }
+            }
+            FlushText();
+            FlushTable();
+        }
+
+        // 마크다운 표 줄들 → 정렬된 그리드(구분선 행 |---| 은 버림). 유효 표 아니면 null.
+        private VisualElement BuildTableGrid(List<string> tableLines)
+        {
+            var rows = new List<string[]>();
+            foreach (var line in tableLines)
+            {
+                var trimmed = line.Trim();
+                if (trimmed.Length == 0) continue;
+                if (trimmed.All(ch => ch == '-' || ch == '|' || ch == ':' || ch == ' ')) continue; // 구분선 행
+                var cells = trimmed.Trim('|').Split('|').Select(c => CleanMarkdown(c.Trim())).ToArray();
+                rows.Add(cells);
+            }
+            if (rows.Count == 0) return null;
+
+            int cols = rows.Max(r => r.Length);
+            var lineCol = new Color(0.30f, 0.30f, 0.34f);
+            var table = new VisualElement();
+            table.style.marginTop = 4;
+            table.style.marginBottom = 6;
+            table.style.borderTopWidth = 1;
+            table.style.borderLeftWidth = 1;
+            table.style.borderTopColor = lineCol;
+            table.style.borderLeftColor = lineCol;
+
+            for (int r = 0; r < rows.Count; r++)
+            {
+                var rowEl = new VisualElement();
+                rowEl.style.flexDirection = FlexDirection.Row;
+                bool isHeader = r == 0;
+                for (int c = 0; c < cols; c++)
+                {
+                    var cell = new Label(c < rows[r].Length ? rows[r][c] : "");
+                    cell.style.flexGrow = 1;
+                    cell.style.flexBasis = 0; // 동일 폭 분배 → 열 정렬
+                    cell.style.whiteSpace = WhiteSpace.Normal;
+                    cell.enableRichText = false;
+                    cell.style.paddingLeft = 6;
+                    cell.style.paddingRight = 6;
+                    cell.style.paddingTop = 3;
+                    cell.style.paddingBottom = 3;
+                    cell.style.borderRightWidth = 1;
+                    cell.style.borderBottomWidth = 1;
+                    cell.style.borderRightColor = lineCol;
+                    cell.style.borderBottomColor = lineCol;
+                    if (isHeader)
+                    {
+                        cell.style.unityFontStyleAndWeight = FontStyle.Bold;
+                        cell.style.backgroundColor = new Color(0.22f, 0.22f, 0.26f);
+                    }
+                    rowEl.Add(cell);
+                }
+                table.Add(rowEl);
+            }
+            return table;
         }
 
         // (스트리밍용 — S3 에선 안 쓰지만 S2/추후를 위해 보존)
@@ -394,19 +524,23 @@ namespace AgentOps.Editor
 
         private void OnInputKeyDown(KeyDownEvent evt)
         {
-            // Enter = 전송 / Shift+Enter = 줄바꿈(가로채지 않고 TextField 가 처리)
-            if ((evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter) && !evt.shiftKey)
-            {
-                OnSend();
-                evt.StopPropagation();
-                evt.StopImmediatePropagation();
-            }
+            // keyCode Enter 만 처리한다. character('\n') 이벤트는 건드리지 않는다
+            // (건드리면 한글 IME 조합·캐럿이 깨짐). 줄바꿈(Shift+Enter)은 필드 기본 동작에 맡긴다.
+            if (evt.keyCode != KeyCode.Return && evt.keyCode != KeyCode.KeypadEnter)
+                return;
+            if (evt.shiftKey)
+                return; // Shift+Enter = 줄바꿈
+
+            evt.StopPropagation();
+            evt.StopImmediatePropagation();
+            // 이벤트 처리 중 value 를 비우면 텍스트 에디터 커서가 꼬여 크래시 → 전송은 다음 틱에.
+            _inputField.schedule.Execute(() => OnSend());
         }
 
         // Send 버튼 / Enter 공통 진입점.
         private void OnSend()
         {
-            var prompt = _inputField.value;
+            var prompt = _inputField.value?.Trim(); // Enter 로 들어온 끝 줄바꿈 등 정리
             if (string.IsNullOrWhiteSpace(prompt))
                 return;
 
@@ -427,23 +561,36 @@ namespace AgentOps.Editor
         // 실제 전송 시작(유저 말풍선 + 세션 누적 + 에이전트 루프). 완료되면 OnMainDone 으로 대기열 처리.
         private void StartSend(string prompt)
         {
+            if (string.IsNullOrWhiteSpace(prompt)) return; // 빈 메시지 전송 방지(400)
             AddMessage("user", prompt);
             _session.AddMessage("user", prompt);
             PersistSession();
-            _isRunning = true;
+            SetRunning(true);
             EditorCoroutineUtility.StartCoroutineOwnerless(RunAgent(_session, _profile, "", _ => OnMainDone()));
         }
 
         // main 에이전트가 끝났을 때 — 처리 플래그 해제 + 대기 메시지가 있으면 자동 전송.
         private void OnMainDone()
         {
-            _isRunning = false;
+            SetRunning(false);
             if (_queuedPrompt == null)
                 return;
             var p = _queuedPrompt;
             _queuedPrompt = null;
             HideQueueBar();
             StartSend(p);
+        }
+
+        // 처리 상태 갱신 + "응답 중" 표시 / 전송 버튼 디밍.
+        private void SetRunning(bool running)
+        {
+            _isRunning = running;
+            if (_statusLabel != null)
+                _statusLabel.style.display = running ? DisplayStyle.Flex : DisplayStyle.None;
+            if (_sendButton != null)
+                _sendButton.style.backgroundColor = running
+                    ? new Color(0.45f, 0.45f, 0.48f)   // 처리 중 = 회색
+                    : new Color(0.85f, 0.46f, 0.34f);  // 평소 = 코랄
         }
 
         // 대기 메시지 표시줄: "⏳ 대기 중: ... [✕]" — ✕ 로 전송 전 취소.
@@ -495,54 +642,152 @@ namespace AgentOps.Editor
             const int maxSteps = 6; // 무한 도구 호출 방지(ch10 감각)
             for (int step = 0; step < maxSteps; step++)
             {
-                // (1) 매 회 새 요청 — messages 가 늘어나고, UnityWebRequest 는 재사용 불가.
+                // (1) 요청 body — 스트리밍(stream=true)으로 토큰을 실시간 수신.
                 var body = new
                 {
                     model = settings.model, // 모델 드롭다운(설정)을 실시간 반영
                     max_tokens = settings.maxTokens,
                     system = BuildSystemPrompt(profile),
                     messages = session.GetMessages(),
-                    tools = UnityTools.Definitions(profile.allowedTools)
+                    tools = UnityTools.Definitions(profile.allowedTools),
+                    stream = true
                 };
-                string json = JsonConvert.SerializeObject(body);
+                var payload = Encoding.UTF8.GetBytes(JsonConvert.SerializeObject(body));
 
-                var www = new UnityWebRequest("https://api.anthropic.com/v1/messages", "POST");
-                www.uploadHandler = new UploadHandlerRaw(System.Text.Encoding.UTF8.GetBytes(json));
-                www.downloadHandler = new DownloadHandlerBuffer(); // 비스트리밍 — 전체 응답을 한 번에
-                www.SetRequestHeader("x-api-key", key);
-                www.SetRequestHeader("anthropic-version", "2023-06-01");
-                www.SetRequestHeader("content-type", "application/json");
+                // (1b) 전송 + 일시 오류 지수 백오프 재시도. 성공 시 SSE 델타를 실시간 표시·재구성.
+                const int maxRetries = 4;
+                string raw = null;
+                long code = 0;
+                bool ok = false;
+                var content = new JArray();
+                string stopReason = null;
+                string turnText = "";
 
-                yield return www.SendWebRequest();
-
-                // (2) 실패 처리 — 본문에 원인이 들어있음
-                if (www.result != UnityWebRequest.Result.Success)
+                for (int attempt = 0; attempt <= maxRetries; attempt++)
                 {
-                    var raw = www.downloadHandler.text;
-                    Debug.LogError($"[AgentOps] {(long)www.responseCode} 실패\n{raw}");
-                    AddMessage("error", $"{(long)www.responseCode} 실패: {ExtractError(raw)}");
+                    // 이번 시도의 스트리밍 누적 상태(재시도 시 초기화)
+                    content = new JArray();
+                    stopReason = null;
+                    turnText = "";
+                    var blockType = new Dictionary<int, string>();
+                    var textBuf = new Dictionary<int, StringBuilder>();
+                    var jsonBuf = new Dictionary<int, StringBuilder>();
+                    var toolStart = new Dictionary<int, JObject>();
+                    VisualElement streamItem = null;
+                    Label streamBody = null;
+
+                    System.Action<JObject> onEvent = o =>
+                    {
+                        var et = (string)o["type"];
+                        if (et == "content_block_start")
+                        {
+                            int idx = (int)o["index"];
+                            var cb = (JObject)o["content_block"];
+                            var ct = (string)cb["type"];
+                            blockType[idx] = ct;
+                            if (ct == "tool_use") { toolStart[idx] = cb; jsonBuf[idx] = new StringBuilder(); }
+                            else if (ct == "text") textBuf[idx] = new StringBuilder();
+                        }
+                        else if (et == "content_block_delta")
+                        {
+                            int idx = (int)o["index"];
+                            var d = o["delta"];
+                            var dt = (string)d["type"];
+                            if (dt == "text_delta")
+                            {
+                                var t = (string)d["text"];
+                                if (textBuf.ContainsKey(idx)) textBuf[idx].Append(t);
+                                if (streamBody == null) // 첫 텍스트 델타에서 라이브 말풍선 생성
+                                {
+                                    streamItem = CreateItem("assistant");
+                                    streamBody = new Label(pfx);
+                                    streamBody.style.whiteSpace = WhiteSpace.Normal;
+                                    streamBody.enableRichText = false;
+                                    streamItem.Add(streamBody);
+                                }
+                                streamBody.text += t;
+                                ScrollToBottom();
+                            }
+                            else if (dt == "input_json_delta")
+                            {
+                                if (jsonBuf.ContainsKey(idx)) jsonBuf[idx].Append((string)d["partial_json"]);
+                            }
+                        }
+                        else if (et == "message_delta")
+                        {
+                            var sr = (string)(o["delta"]?["stop_reason"]);
+                            if (!string.IsNullOrEmpty(sr)) stopReason = sr;
+                        }
+                    };
+
+                    // UnityWebRequest 는 재사용 불가 — 시도마다 새로 만든다.
+                    var www = new UnityWebRequest("https://api.anthropic.com/v1/messages", "POST");
+                    www.uploadHandler = new UploadHandlerRaw(payload);
+                    var sse = new SseDownloadHandler(null, onEvent);
+                    www.downloadHandler = sse;
+                    www.SetRequestHeader("x-api-key", key);
+                    www.SetRequestHeader("anthropic-version", "2023-06-01");
+                    www.SetRequestHeader("content-type", "application/json");
+
+                    yield return www.SendWebRequest();
+
+                    code = www.responseCode;
+                    raw = sse.RawText;
+                    if (www.result == UnityWebRequest.Result.Success)
+                    {
+                        ok = true;
+                        // SSE 블록들을 content 배열로 재구성(인덱스 순)
+                        foreach (var idx in blockType.Keys.OrderBy(k => k))
+                        {
+                            if (blockType[idx] == "text")
+                            {
+                                var tb = textBuf[idx].ToString();
+                                content.Add(new JObject { ["type"] = "text", ["text"] = tb });
+                                turnText += (turnText.Length > 0 ? "\n" : "") + tb;
+                            }
+                            else if (blockType[idx] == "tool_use")
+                            {
+                                var cb = toolStart[idx];
+                                JObject inp;
+                                try { var js = jsonBuf[idx].ToString(); inp = string.IsNullOrWhiteSpace(js) ? new JObject() : JObject.Parse(js); }
+                                catch { inp = new JObject(); }
+                                content.Add(new JObject { ["type"] = "tool_use", ["id"] = cb["id"], ["name"] = cb["name"], ["input"] = inp });
+                            }
+                        }
+                        // 라이브로 흘린 원문을 표 포함 최종 렌더로 교체
+                        if (streamBody != null)
+                        {
+                            streamItem.Remove(streamBody);
+                            RenderAssistant(streamItem, string.IsNullOrEmpty(pfx) ? turnText : pfx + turnText);
+                        }
+                        break;
+                    }
+
+                    // 실패 — 일시 오류만 재시도(과부하·혼잡·연결). 그 외(4xx 등)는 즉시 중단.
+                    bool retryable = code == 429 || code == 529 || code == 500 || code == 502 || code == 503 || code == 0;
+                    if (!retryable || attempt == maxRetries)
+                        break;
+
+                    int wait = 1 << attempt; // 1, 2, 4, 8초
+                    AddMessage("assistant", pfx + $"⏳ 일시 오류({code}) — {wait}초 후 재시도 ({attempt + 1}/{maxRetries})");
+                    yield return new EditorWaitForSeconds(wait);
+                }
+
+                // (2) 최종 실패 처리 — 본문에 원인이 들어있음
+                if (!ok)
+                {
+                    Debug.LogError($"[AgentOps] {code} 실패\n{raw}");
+                    AddMessage("error", $"{code} 실패: {ExtractError(raw)}");
                     onFinalText?.Invoke($"[오류] {ExtractError(raw)}");
                     yield break;
                 }
 
-                // (3) 응답 파싱 — content 는 블록 배열(JArray). 통째로 세션에 저장(다음 호출에 포함).
-                var res = JObject.Parse(www.downloadHandler.text);
-                var content = (JArray)res["content"];
+                // (3) 재구성한 assistant content 를 세션에 저장(다음 호출에 포함).
                 session.AddMessage("assistant", content);
                 if (session == _session) PersistSession(); // main 세션만 영속(sub 는 일회성)
 
-                // (3a) 텍스트 블록은 화면 말풍선으로 + 최종 텍스트 누적
-                string turnText = "";
-                foreach (var block in content)
-                    if ((string)block["type"] == "text")
-                    {
-                        var t = (string)block["text"];
-                        AddMessage("assistant", pfx + t);
-                        turnText += (turnText.Length > 0 ? "\n" : "") + t;
-                    }
-
                 // (4) 도구를 안 부르면(end_turn 등) 끝.
-                if ((string)res["stop_reason"] != "tool_use")
+                if (stopReason != "tool_use")
                 {
                     onFinalText?.Invoke(turnText);
                     yield break;
@@ -601,6 +846,13 @@ namespace AgentOps.Editor
                     string output = UnityTools.Run(name, input);       // ← Unity 도구 실행
 
                     results.Add(new { type = "tool_result", tool_use_id = toolUseId, content = output });
+                }
+
+                // (5b) tool_use 라고 했지만 실제 실행된 도구가 없으면(빈 결과) 빈 user 턴을 보내지 않고 종료.
+                if (results.Count == 0)
+                {
+                    onFinalText?.Invoke(turnText);
+                    yield break;
                 }
 
                 // (6) tool_result 들을 user 턴으로 넣고 루프 → Claude 가 결과 보고 이어감

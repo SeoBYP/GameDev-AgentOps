@@ -17,7 +17,8 @@ namespace AgentOps.Editor
     /// </summary>
     public class SseDownloadHandler : DownloadHandlerScript
     {
-        private readonly Action<string> _onDelta;   // 토큰(델타) 도착 콜백
+        private readonly Action<string> _onDelta;   // 텍스트 델타 콜백(간단 사용용)
+        private readonly Action<JObject> _onEvent;  // 모든 SSE 이벤트 콜백(에이전트 루프용 — tool_use·stop_reason 재구성)
         private string _buffer = string.Empty;       // 줄 경계용 — 청크가 줄 중간에서 끊기므로
         private readonly StringBuilder _raw = new StringBuilder(); // 원문 전체(에러 진단용)
 
@@ -25,8 +26,11 @@ namespace AgentOps.Editor
         public string RawText => _raw.ToString();
 
         // 미리 할당한 버퍼로 생성 → ReceiveData 마다 새 배열 할당 안 함.
-        public SseDownloadHandler(Action<string> onDelta) : base(new byte[8192])
-            => _onDelta = onDelta;
+        public SseDownloadHandler(Action<string> onDelta, Action<JObject> onEvent = null) : base(new byte[8192])
+        {
+            _onDelta = onDelta;
+            _onEvent = onEvent;
+        }
 
         // Unity 가 청크 도착마다 호출. (메인 스레드에서 호출되므로 콜백에서 UI 갱신 안전)
         protected override bool ReceiveData(byte[] data, int dataLength)
@@ -57,8 +61,11 @@ namespace AgentOps.Editor
                 try { o = JObject.Parse(payload); }
                 catch { continue; } // 혹시 모를 파싱 실패는 건너뜀
 
-                // 우리가 원하는 건 텍스트 델타뿐.
-                if ((string)o["type"] == "content_block_delta"
+                _onEvent?.Invoke(o); // 모든 이벤트를 그대로 전달(루프가 재구성)
+
+                // 간단 사용용 텍스트 델타 콜백.
+                if (_onDelta != null
+                    && (string)o["type"] == "content_block_delta"
                     && (string)(o["delta"]?["type"]) == "text_delta")
                 {
                     var t = (string)o["delta"]["text"];
