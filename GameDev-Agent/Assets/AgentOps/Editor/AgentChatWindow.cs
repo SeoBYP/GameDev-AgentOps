@@ -1,6 +1,7 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using AgentOps.Sessions;
 using Unity.EditorCoroutines.Editor;
 using Unity.Plastic.Newtonsoft.Json;
@@ -24,6 +25,17 @@ namespace AgentOps.Editor
         private AgentSession _session;
         private int _approval; // 도구 승인 상태: 0=대기중 / 1=허용 / -1=거부
         private AgentProfile _profile = AgentProfiles.Builder; // 현재 모드(도구 권한)
+        private bool _isRunning;          // AI 처리 중인가
+        private string _queuedPrompt;     // 처리 중 입력한 대기 메시지(전송 전 취소 가능)
+        private VisualElement _queueBar;  // 대기 메시지 표시줄
+        private int _approvalPolicy;      // 승인 정책: 0=쓰기만 확인 / 1=전부 자동 / 2=전부 확인
+        private DropdownField _sessionDropdown; // 상단 세션 목록
+        private TextField _sessionSearch;       // 세션 이름 검색
+        private List<string> _allSessionNames = new List<string>();
+        private string _sessionFile;            // 현재 대화의 자동저장 파일 경로(null=아직 미저장)
+
+        private static readonly string[] ModelChoices = { "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5" };
+        private static readonly string[] ApprovalChoices = { "쓰기만 확인", "전부 자동 승인", "전부 확인" };
 
         [MenuItem("Window/AgentOps/Chat")]
         public static void Open()
@@ -42,59 +54,189 @@ namespace AgentOps.Editor
             root.style.paddingLeft = 8;
             root.style.paddingRight = 8;
 
-            // 0) 상단 줄: 모드 드롭다운(도구 권한) + 새 대화 버튼
-            var topRow = new VisualElement();
-            topRow.style.flexDirection = FlexDirection.Row;
-            topRow.style.marginBottom = 6;
+            // 0) 상단 — 세션 목록(드롭다운 + 검색)으로 과거 대화 전환
+            var settings0 = AgentOpsSettings.GetOrCreate();
 
-            var modeDropdown = new DropdownField("모드", AgentProfiles.Names(), 1); // 기본 Builder
-            modeDropdown.style.flexGrow = 1;
-            modeDropdown.RegisterValueChangedCallback(evt => _profile = AgentProfiles.ByName(evt.newValue));
-            topRow.Add(modeDropdown);
+            var header = new VisualElement();
+            header.style.flexDirection = FlexDirection.Row;
+            header.style.alignItems = Align.Center;
+            header.style.flexShrink = 0;
+            header.style.marginBottom = 8;
 
-            var newButton = new Button(NewChat) { text = "새 대화" };
-            topRow.Add(newButton);
-            topRow.Add(new Button(SaveSessionToFile) { text = "저장" });
-            topRow.Add(new Button(LoadSessionFromFile) { text = "불러오기" });
-            root.Add(topRow);
+            header.Add(StyleFlatButton(new Button(NewChat) { text = "+  새 대화" }));
+
+            var searchIcon = new Label("세션");
+            searchIcon.style.marginRight = 6;
+            searchIcon.style.opacity = 0.6f;
+            searchIcon.style.fontSize = 11;
+            header.Add(searchIcon);
+
+            _sessionSearch = new TextField();
+            _sessionSearch.style.flexGrow = 1;
+            _sessionSearch.style.marginRight = 6;
+            _sessionSearch.tooltip = "세션 이름 검색";
+            _sessionSearch.RegisterValueChangedCallback(_ => RefreshSessionDropdown());
+            header.Add(_sessionSearch);
+
+            _sessionDropdown = new DropdownField();
+            _sessionDropdown.style.minWidth = 150;
+            _sessionDropdown.style.flexShrink = 0;
+            _sessionDropdown.tooltip = "저장된 세션 불러오기";
+            _sessionDropdown.RegisterValueChangedCallback(evt =>
+            {
+                if (!string.IsNullOrEmpty(evt.newValue))
+                    LoadSessionByName(evt.newValue);
+            });
+            header.Add(_sessionDropdown);
+            root.Add(header);
 
             // 1) 대화 transcript — AddMessage() 가 여기에 말풍선을 추가한다.
             _transcript = new ScrollView(ScrollViewMode.Vertical);
             _transcript.style.flexGrow = 1; // 남는 세로 공간을 다 차지
-            _transcript.style.marginBottom = 6;
+            _transcript.style.minHeight = 0; // flex min-height:auto 함정 — 내용 많아도 내부 스크롤(상/하단 안 밀림)
+            _transcript.style.marginBottom = 8;
             _transcript.style.paddingTop = 4;
             _transcript.style.paddingBottom = 4;
             _transcript.style.paddingLeft = 4;
             _transcript.style.paddingRight = 4;
-            var border = new Color(0.3f, 0.3f, 0.3f);
-            _transcript.style.borderTopWidth = 1;
-            _transcript.style.borderBottomWidth = 1;
-            _transcript.style.borderLeftWidth = 1;
-            _transcript.style.borderRightWidth = 1;
-            _transcript.style.borderTopColor = border;
-            _transcript.style.borderBottomColor = border;
-            _transcript.style.borderLeftColor = border;
-            _transcript.style.borderRightColor = border;
-            root.Add(_transcript);
+            root.Add(_transcript); // 테두리 없는 열린 영역(Claude Desktop 풍)
 
-            // 2) 입력 줄 (TextField + Send 버튼을 가로로)
-            var inputRow = new VisualElement();
-            inputRow.style.flexDirection = FlexDirection.Row;
+            // 1b) 대기 메시지 표시줄 (AI 처리 중 입력 → 대기, ✕로 취소). 기본 숨김.
+            _queueBar = new VisualElement();
+            _queueBar.style.flexDirection = FlexDirection.Row;
+            _queueBar.style.flexShrink = 0;
+            _queueBar.style.marginBottom = 4;
+            _queueBar.style.display = DisplayStyle.None;
+            root.Add(_queueBar);
 
-            _inputField = new TextField();
+            // 2) 하단 입력 카드 (Claude Desktop 풍) — 둥근 박스 안에 입력 + 하단 컨트롤바
+            var inputCard = new VisualElement();
+            inputCard.style.flexShrink = 0;
+            inputCard.style.paddingTop = 8;
+            inputCard.style.paddingBottom = 8;
+            inputCard.style.paddingLeft = 10;
+            inputCard.style.paddingRight = 10;
+            inputCard.style.backgroundColor = new Color(0.16f, 0.16f, 0.18f);
+            SetBorderRadius(inputCard, 14);
+            SetBorder(inputCard, 1, new Color(0.32f, 0.32f, 0.36f));
+
+            // 2a) 입력창 — 카드 안에 녹아들도록 투명/무테
+            _inputField = new TextField { multiline = true };
             _inputField.style.flexGrow = 1;
-            _inputField.style.marginRight = 4;
-            // Enter로도 전송. TrickleDown으로 텍스트필드가 키를 먹기 전에 가로챈다.
+            _inputField.style.minHeight = 40;
+            _inputField.style.maxHeight = 140;
+            _inputField.style.whiteSpace = WhiteSpace.Normal;
+            var innerInput = _inputField.Q("unity-text-input");
+            if (innerInput != null) // TextField 의 실제 입력 요소 — 배경/테두리 제거(카드에 녹아들게)
+            {
+                innerInput.style.backgroundColor = Color.clear;
+                SetBorder(innerInput, 0, Color.clear);
+            }
+            // Enter=전송 / Shift+Enter=줄바꿈. TrickleDown 으로 텍스트필드보다 먼저 가로챈다.
             _inputField.RegisterCallback<KeyDownEvent>(OnInputKeyDown, TrickleDown.TrickleDown);
-            inputRow.Add(_inputField);
+            inputCard.Add(_inputField);
 
-            var sendButton = new Button(OnSend) { text = "Send" };
-            inputRow.Add(sendButton);
+            var sendButton = new Button(OnSend) { text = "↑" };
+            sendButton.style.width = 30;
+            sendButton.style.height = 30;
+            sendButton.style.marginLeft = 4;
+            sendButton.style.marginRight = 0;
+            sendButton.style.paddingTop = 0;
+            sendButton.style.paddingBottom = 0;
+            sendButton.style.paddingLeft = 0;
+            sendButton.style.paddingRight = 0;
+            sendButton.style.fontSize = 15;
+            sendButton.style.unityFontStyleAndWeight = FontStyle.Bold;
+            sendButton.style.color = Color.white;
+            sendButton.style.backgroundColor = new Color(0.85f, 0.46f, 0.34f); // Claude 코랄
+            SetBorderRadius(sendButton, 15);
+            SetBorder(sendButton, 0, Color.clear);
+            
+            
+            root.Add(inputCard); // 카드는 텍스트 영역만 담는다
 
-            root.Add(inputRow);
+            // 3) 카드 "밑" 별도 컨트롤 줄 — 모드/모델/승인 칩 + 우측 동그란 ↑ 전송 (텍스트 영역 외부)
+            var controlBar = new VisualElement();
+            controlBar.style.flexDirection = FlexDirection.Row;
+            controlBar.style.alignItems = Align.Center;
+            controlBar.style.flexShrink = 0;
+            controlBar.style.marginTop = 6;
+
+            var modeDropdown = new DropdownField("", AgentProfiles.Names(), 1); // 기본 Builder
+            StyleChip(modeDropdown);
+            modeDropdown.RegisterValueChangedCallback(evt => _profile = AgentProfiles.ByName(evt.newValue));
+            controlBar.Add(modeDropdown);
+
+            int modelIdx = System.Array.IndexOf(ModelChoices, settings0.model);
+            var modelDropdown = new DropdownField("", new List<string>(ModelChoices), modelIdx < 0 ? 0 : modelIdx);
+            StyleChip(modelDropdown);
+            modelDropdown.RegisterValueChangedCallback(evt =>
+            {
+                var s = AgentOpsSettings.GetOrCreate();
+                s.model = evt.newValue;
+                EditorUtility.SetDirty(s);
+            });
+            controlBar.Add(modelDropdown);
+
+            var approvalDropdown = new DropdownField("", new List<string>(ApprovalChoices), 0);
+            StyleChip(approvalDropdown);
+            approvalDropdown.RegisterValueChangedCallback(evt => _approvalPolicy = System.Array.IndexOf(ApprovalChoices, evt.newValue));
+            controlBar.Add(approvalDropdown);
+
+            var controlSpacer = new VisualElement();
+            controlSpacer.style.flexGrow = 1;
+            controlBar.Add(controlSpacer);
+
+            controlBar.Add(sendButton);
+            root.Add(controlBar);
+
             _inputField.Focus();
-
+            
             RestoreSession(); // 도메인 리로드 후 대화 복원(SessionState)
+            RefreshSessionDropdown(); // 저장된 세션 목록 채우기
+        }
+
+        // --- Claude Desktop 풍 스타일 헬퍼 ---
+        private static Button StyleFlatButton(Button b)
+        {
+            b.style.backgroundColor = Color.clear;
+            SetBorder(b, 0, Color.clear);
+            b.style.marginLeft = 0;
+            b.style.marginRight = 4;
+            b.style.paddingLeft = 8;
+            b.style.paddingRight = 8;
+            b.style.color = new Color(0.80f, 0.80f, 0.84f);
+            return b;
+        }
+
+        private static void StyleChip(DropdownField d)
+        {
+            if (d.labelElement != null) d.labelElement.style.display = DisplayStyle.None; // 라벨 숨김(값만 표시)
+            d.style.marginRight = 6;
+            d.style.marginLeft = 0;
+            d.style.fontSize = 11;
+            d.style.flexShrink = 1;
+            d.style.maxWidth = 150;
+        }
+
+        private static void SetBorderRadius(VisualElement e, float r)
+        {
+            e.style.borderTopLeftRadius = r;
+            e.style.borderTopRightRadius = r;
+            e.style.borderBottomLeftRadius = r;
+            e.style.borderBottomRightRadius = r;
+        }
+
+        private static void SetBorder(VisualElement e, float w, Color c)
+        {
+            e.style.borderTopWidth = w;
+            e.style.borderBottomWidth = w;
+            e.style.borderLeftWidth = w;
+            e.style.borderRightWidth = w;
+            e.style.borderTopColor = c;
+            e.style.borderBottomColor = c;
+            e.style.borderLeftColor = c;
+            e.style.borderRightColor = c;
         }
 
         /// <summary>
@@ -106,36 +248,34 @@ namespace AgentOps.Editor
             bool isUser = role == "user";
             bool isError = role == "error";
 
-            var bubble = new VisualElement();
-            bubble.style.marginTop = 4;
-            bubble.style.marginBottom = 4;
-            bubble.style.paddingTop = 6;
-            bubble.style.paddingBottom = 6;
-            bubble.style.paddingLeft = 8;
-            bubble.style.paddingRight = 8;
-            bubble.style.borderTopLeftRadius = 8;
-            bubble.style.borderTopRightRadius = 8;
-            bubble.style.borderBottomLeftRadius = 8;
-            bubble.style.borderBottomRightRadius = 8;
-            bubble.style.maxWidth = Length.Percent(85);
-            bubble.style.alignSelf = isUser ? Align.FlexEnd : Align.FlexStart;
-            bubble.style.backgroundColor =
-                isError ? new Color(0.45f, 0.20f, 0.20f) :
-                isUser ? new Color(0.18f, 0.32f, 0.50f) :
-                new Color(0.24f, 0.24f, 0.26f);
+            // Claude Code 식 평면 transcript — 역할 라벨 + 전체폭(말풍선 없음).
+            var item = new VisualElement();
+            item.style.marginBottom = 10;
+            item.style.paddingLeft = 4;
+            item.style.paddingRight = 4;
+            if (isUser) // 유저 입력만 왼쪽 강조선으로 살짝 구분
+            {
+                item.style.borderLeftWidth = 2;
+                item.style.borderLeftColor = new Color(0.35f, 0.55f, 0.90f);
+                item.style.paddingLeft = 8;
+            }
 
             var roleLabel = new Label(isUser ? "You" : isError ? "Error" : "Claude");
             roleLabel.style.fontSize = 10;
-            roleLabel.style.opacity = 0.6f;
+            roleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
+            roleLabel.style.color =
+                isError ? new Color(0.90f, 0.45f, 0.45f) :
+                isUser ? new Color(0.45f, 0.65f, 1.00f) :
+                new Color(0.55f, 0.80f, 0.60f);
             roleLabel.style.marginBottom = 2;
-            bubble.Add(roleLabel);
+            item.Add(roleLabel);
 
             var body = new Label(string.Empty);
             body.style.whiteSpace = WhiteSpace.Normal; // 자동 줄바꿈
             body.enableRichText = false;               // 마크다운은 직접 정리 → rich text 끔(코드의 <> 안전)
-            bubble.Add(body);
+            item.Add(body);
 
-            _transcript.Add(bubble);
+            _transcript.Add(item);
             ScrollToBottom();
             return body;
         }
@@ -254,7 +394,8 @@ namespace AgentOps.Editor
 
         private void OnInputKeyDown(KeyDownEvent evt)
         {
-            if (evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter)
+            // Enter = 전송 / Shift+Enter = 줄바꿈(가로채지 않고 TextField 가 처리)
+            if ((evt.keyCode == KeyCode.Return || evt.keyCode == KeyCode.KeypadEnter) && !evt.shiftKey)
             {
                 OnSend();
                 evt.StopPropagation();
@@ -269,14 +410,70 @@ namespace AgentOps.Editor
             if (string.IsNullOrWhiteSpace(prompt))
                 return;
 
-            AddMessage("user", prompt);            // UI: 유저 말풍선
-            _session.AddMessage("user", prompt);   // 데이터: 세션에 누적
-            PersistSession();
-
-            EditorCoroutineUtility.StartCoroutineOwnerless(RunAgent(_session, _profile, "", null));
-
             _inputField.value = string.Empty; // 입력창 비우기
             _inputField.Focus();
+
+            if (_isRunning)
+            {
+                // 처리 중 → 즉시 보내지 않고 대기열에 보관(기존 대기 메시지는 대체). 전송 전까지 ✕로 취소 가능.
+                _queuedPrompt = prompt;
+                ShowQueueBar(prompt);
+                return;
+            }
+
+            StartSend(prompt);
+        }
+
+        // 실제 전송 시작(유저 말풍선 + 세션 누적 + 에이전트 루프). 완료되면 OnMainDone 으로 대기열 처리.
+        private void StartSend(string prompt)
+        {
+            AddMessage("user", prompt);
+            _session.AddMessage("user", prompt);
+            PersistSession();
+            _isRunning = true;
+            EditorCoroutineUtility.StartCoroutineOwnerless(RunAgent(_session, _profile, "", _ => OnMainDone()));
+        }
+
+        // main 에이전트가 끝났을 때 — 처리 플래그 해제 + 대기 메시지가 있으면 자동 전송.
+        private void OnMainDone()
+        {
+            _isRunning = false;
+            if (_queuedPrompt == null)
+                return;
+            var p = _queuedPrompt;
+            _queuedPrompt = null;
+            HideQueueBar();
+            StartSend(p);
+        }
+
+        // 대기 메시지 표시줄: "⏳ 대기 중: ... [✕]" — ✕ 로 전송 전 취소.
+        private void ShowQueueBar(string prompt)
+        {
+            _queueBar.Clear();
+            var lbl = new Label($"⏳ 대기 중: {prompt}");
+            lbl.style.flexGrow = 1;
+            lbl.style.whiteSpace = WhiteSpace.Normal;
+            lbl.style.opacity = 0.85f;
+            _queueBar.Add(lbl);
+            _queueBar.Add(new Button(() => { _queuedPrompt = null; HideQueueBar(); }) { text = "✕" });
+            _queueBar.style.display = DisplayStyle.Flex;
+        }
+
+        private void HideQueueBar()
+        {
+            _queueBar.Clear();
+            _queueBar.style.display = DisplayStyle.None;
+        }
+
+        // 도구 실행 전 승인 필요 여부 — 승인 정책(드롭다운)을 도구 기본값에 덧씌운다.
+        private bool NeedsApproval(string toolName)
+        {
+            switch (_approvalPolicy)
+            {
+                case 1: return false;                              // 전부 자동 승인
+                case 2: return true;                               // 전부 확인
+                default: return UnityTools.RequiresApproval(toolName); // 쓰기만 확인(기본)
+            }
         }
 
         /// <summary>
@@ -301,7 +498,7 @@ namespace AgentOps.Editor
                 // (1) 매 회 새 요청 — messages 가 늘어나고, UnityWebRequest 는 재사용 불가.
                 var body = new
                 {
-                    model = session.GetModel(),
+                    model = settings.model, // 모델 드롭다운(설정)을 실시간 반영
                     max_tokens = settings.maxTokens,
                     system = BuildSystemPrompt(profile),
                     messages = session.GetMessages(),
@@ -380,8 +577,8 @@ namespace AgentOps.Editor
                         continue;
                     }
 
-                    // (HITL) 승인 필요한 도구면 사용자 결정을 기다린다.
-                    if (UnityTools.RequiresApproval(name))
+                    // (HITL) 승인 필요한 도구면 사용자 결정을 기다린다(승인 정책 반영).
+                    if (NeedsApproval(name))
                     {
                         AddApprovalRequest(name, input.ToString());
                         while (_approval == 0)
@@ -421,7 +618,9 @@ namespace AgentOps.Editor
             return
                 "당신은 \"GameDev AgentOps\", Unity Editor 안에서 동작하는 게임 개발 보조 에이전트입니다.\n" +
                 "Unity 도구로 씬·콘솔 로그·컴파일 에러·파일을 읽고, 필요한 변경(GameObject 생성·파일 쓰기)은 도구로 수행합니다. 쓰기 작업은 사용자 승인이 필요합니다.\n" +
-                "추측하지 말고, 도구로 직접 확인한 사실에 근거해 답하세요.\n\n" +
+                "추측하지 말고, 도구로 직접 확인한 사실에 근거해 답하세요.\n" +
+                "간결하게, 작업 위주로 답하세요. 불필요한 서론·맺음말·과장된 표현·'무엇을 도와드릴까요?' 같은 되묻기를 줄이세요. " +
+                "의도가 명확하면 확인을 구하지 말고 바로 도구로 실행하세요(쓰기 도구는 별도 승인 게이트가 있으니 미리 묻지 마세요).\n\n" +
                 profile.systemAddendum + "\n\n" +
                 "## Skills (전문 지침)\n" +
                 "아래는 특정 작업용 상세 지침 목록입니다. 관련 작업이면 `load_skill` 도구로 먼저 해당 스킬을 불러와 그 절차를 따르세요.\n" +
@@ -431,11 +630,46 @@ namespace AgentOps.Editor
         // --- 세션 영속(도메인 리로드 생존): SessionState 에 JSON 으로 저장/복원 ---
         private const string SessionKey = "agentops.session";
 
-        // 현재 대화를 SessionState 에 저장 (컴파일/도메인 리로드를 넘어 유지).
+        // 현재 대화를 SessionState(리로드 생존) + 세션 파일(히스토리)에 자동 저장.
         private void PersistSession()
         {
             try { SessionState.SetString(SessionKey, JsonConvert.SerializeObject(_session.GetMessages())); }
             catch { /* 직렬화 실패는 무시 — 연속성은 best-effort */ }
+            AutoSaveSession();
+        }
+
+        // 세션 파일에 항상 자동 저장 → 상단 드롭다운(채팅 히스토리)에 반영. 파일명은 첫 메시지에서 1회 생성.
+        private void AutoSaveSession()
+        {
+            try
+            {
+                if (_session.GetMessages().Count == 0)
+                    return; // 빈 새 대화는 파일을 만들지 않음
+                if (_sessionFile == null)
+                    _sessionFile = Path.Combine(SessionsDir(), MakeSessionFileName());
+                File.WriteAllText(_sessionFile, JsonConvert.SerializeObject(_session.GetMessages()));
+                RefreshSessionDropdown();
+            }
+            catch { /* 자동 저장 실패는 무시 */ }
+        }
+
+        // 첫 user 메시지로 읽기 쉬운 파일명을 만든다(중복은 (2),(3)… 으로 회피).
+        private string MakeSessionFileName()
+        {
+            string title = "대화";
+            foreach (var m in _session.GetMessages())
+                if (m.role == "user" && m.content is string s && !string.IsNullOrWhiteSpace(s)) { title = s; break; }
+
+            foreach (var c in Path.GetInvalidFileNameChars())
+                title = title.Replace(c, ' ');
+            title = title.Trim();
+            if (title.Length > 30) title = title.Substring(0, 30);
+            if (title.Length == 0) title = "대화";
+
+            var path = Path.Combine(SessionsDir(), title + ".json");
+            for (int i = 2; File.Exists(path); i++)
+                path = Path.Combine(SessionsDir(), $"{title} ({i}).json");
+            return Path.GetFileName(path);
         }
 
         // 저장된 대화가 있으면 복원하고 말풍선을 다시 그린다. 없으면 새 세션.
@@ -485,6 +719,8 @@ namespace AgentOps.Editor
             SessionState.EraseString(SessionKey);
             _session = new AgentSession(GUID.Generate().ToString(), AgentOpsSettings.GetOrCreate().model);
             _transcript.Clear();
+            _sessionFile = null;                          // 다음 첫 메시지에서 새 파일 생성
+            _sessionDropdown?.SetValueWithoutNotify(""); // 선택 표시 초기화
         }
 
         // --- Layer 2: 이름 붙여 파일로 저장/불러오기 (에디터 재시작 후에도 유지) ---
@@ -497,18 +733,16 @@ namespace AgentOps.Editor
             return dir;
         }
 
-        private void SaveSessionToFile()
+        // 상단 드롭다운에서 고른 세션(AgentOpsSessions/<name>.json)을 불러온다.
+        private void LoadSessionByName(string name)
         {
-            var path = EditorUtility.SaveFilePanel("세션 저장", SessionsDir(), "session", "json");
-            if (string.IsNullOrEmpty(path))
-                return; // 취소
-            File.WriteAllText(path, JsonConvert.SerializeObject(_session.GetMessages()));
+            LoadSessionPath(Path.Combine(SessionsDir(), name + ".json"));
         }
 
-        private void LoadSessionFromFile()
+        // 경로의 세션 파일을 현재 대화로 로드. 이후 메시지는 이 파일에 계속 자동 저장된다.
+        private void LoadSessionPath(string path)
         {
-            var path = EditorUtility.OpenFilePanel("세션 불러오기", SessionsDir(), "json");
-            if (string.IsNullOrEmpty(path))
+            if (string.IsNullOrEmpty(path) || !File.Exists(path))
                 return;
 
             try
@@ -522,12 +756,40 @@ namespace AgentOps.Editor
                 foreach (var m in msgs)
                     _session.AddMessage(m);
                 RebuildTranscript(msgs);
-                PersistSession(); // 불러온 대화를 현재 연속성(SessionState)에도 반영
+                _sessionFile = path; // 이어지는 대화는 이 파일에 자동 저장
+                PersistSession();    // SessionState(연속성)에도 반영
             }
             catch
             {
                 AddMessage("error", "세션 파일을 불러오지 못했습니다 (형식 오류).");
             }
+        }
+
+        // AgentOpsSessions/ 의 세션 파일 이름 목록(최근 저장 순).
+        private static List<string> ListSessionNames()
+        {
+            return Directory.GetFiles(SessionsDir(), "*.json")
+                .OrderByDescending(File.GetLastWriteTime)
+                .Select(Path.GetFileNameWithoutExtension)
+                .ToList();
+        }
+
+        // 세션 목록을 다시 스캔하고 검색어로 필터해 드롭다운 choices 갱신.
+        private void RefreshSessionDropdown()
+        {
+            if (_sessionDropdown == null)
+                return;
+
+            _allSessionNames = ListSessionNames();
+            var q = _sessionSearch != null ? _sessionSearch.value : "";
+            var filtered = string.IsNullOrWhiteSpace(q)
+                ? _allSessionNames
+                : _allSessionNames.Where(n => n.IndexOf(q, System.StringComparison.OrdinalIgnoreCase) >= 0).ToList();
+
+            var current = _sessionDropdown.value;
+            _sessionDropdown.choices = filtered;
+            if (string.IsNullOrEmpty(current) || !filtered.Contains(current))
+                _sessionDropdown.SetValueWithoutNotify(""); // 선택값이 목록에 없으면 비움
         }
     }
 }
