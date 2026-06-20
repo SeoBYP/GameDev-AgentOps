@@ -25,6 +25,12 @@
 
 ## 🧠 동작 방식
 
+![GameDev AgentOps 아키텍처](assets/architecture.svg)
+
+<sub>① 에이전트 코어(파랑): 채팅창 → Agent Loop ↔ Claude API → 도구, HITL 승인·프로필·Skills·세션영속 · ② S4c 멀티에이전트(보라): Coordinator가 Triage/Builder sub-agent에 위임</sub>
+
+<details><summary>텍스트 요약 다이어그램</summary>
+
 ```
 ┌────────────────────── Unity Editor ──────────────────────┐
 │                                                          │
@@ -43,6 +49,8 @@
                  Anthropic Claude Messages API
 ```
 
+</details>
+
 - **두뇌**는 Claude, **손발**은 Unity 에디터 도구. 에이전트 루프가 둘을 잇습니다.
 - API 키는 코드/에셋이 아니라 **EditorPrefs**(머신 로컬)에만 저장 — 레포에 절대 커밋되지 않습니다.
 
@@ -55,7 +63,7 @@
 | **S1** | Hello Claude in Unity — 에디터 채팅 창에서 Claude 단발 호출·응답 | ✅ 완료 |
 | **S2** | 멀티턴 대화 + 스트리밍 실시간 출력 | ✅ 완료 |
 | **S3** | Tool 루프 + Unity 도구(씬 읽기·GameObject 생성) + 실행 승인(HITL) | ✅ 완료 |
-| **S4** | 작업별 Skills 로딩 + 역할 분담 Multi-Agent 팀 | ⏳ 계획 |
+| **S4** | Skills 로딩 + 역할별 권한 분리 + 멀티에이전트 위임(Coordinator→sub-agent) | ✅ 완료 |
 
 장기 목표: Unity 로그 파서 · 데이터(CSV/밸런스) 검증 · 기획 문서 RAG · MCP 공용 도구 계층을 갖춘 **게임 개발 AgentOps 허브**.
 
